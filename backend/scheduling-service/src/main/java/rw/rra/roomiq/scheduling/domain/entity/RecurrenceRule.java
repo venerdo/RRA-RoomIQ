@@ -46,6 +46,15 @@ public class RecurrenceRule extends SchedulingEntity {
         this.createdByUserId = createdByUserId;
     }
 
+    public void update(String rrule, LocalDate startsOn, LocalDate endsOn, Integer occurrenceCount,
+                       String timezone) {
+        this.rrule = rrule;
+        this.startsOn = startsOn;
+        this.endsOn = endsOn;
+        this.occurrenceCount = occurrenceCount;
+        this.timezone = timezone;
+    }
+
     @PrePersist
     void initializeCreatedAt() {
         if (createdAt == null) {

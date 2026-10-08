@@ -9,6 +9,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import rw.rra.roomiq.common.web.DomainException;
 
+import java.util.UUID;
+
 @Component
 public class SchedulingAuthorizationClient {
     private final RestClient identityClient;
@@ -17,15 +19,19 @@ public class SchedulingAuthorizationClient {
         this.identityClient = RestClient.create(identityUrl);
     }
 
-    public void authorize(String bearerToken, String action) {
+    public UUID authorize(String bearerToken, String action) {
         try {
-            identityClient.post()
+            SchedulingAuthorizationResponse response = identityClient.post()
                     .uri("/api/v1/internal/authorization/scheduling")
                     .header(HttpHeaders.AUTHORIZATION, bearerToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(new SchedulingAuthorizationRequest(action))
                     .retrieve()
-                    .toBodilessEntity();
+                    .body(SchedulingAuthorizationResponse.class);
+            if (response == null || response.actorUserId() == null) {
+                throw unavailable();
+            }
+            return response.actorUserId();
         } catch (HttpClientErrorException.Unauthorized exception) {
             throw new DomainException(org.springframework.http.HttpStatus.UNAUTHORIZED,
                     "AUTHENTICATION_REQUIRED", "Authentication is required");
@@ -33,11 +39,18 @@ public class SchedulingAuthorizationClient {
             throw new DomainException(org.springframework.http.HttpStatus.FORBIDDEN,
                     "ACCESS_DENIED", "Scheduling access is denied");
         } catch (RestClientException exception) {
-            throw new DomainException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-                    "IDENTITY_AUTHORIZATION_UNAVAILABLE", "Identity authorization is unavailable");
+            throw unavailable();
         }
     }
 
     private record SchedulingAuthorizationRequest(String action) {
+    }
+
+    private record SchedulingAuthorizationResponse(UUID actorUserId) {
+    }
+
+    private static DomainException unavailable() {
+        return new DomainException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "IDENTITY_AUTHORIZATION_UNAVAILABLE", "Identity authorization is unavailable");
     }
 }

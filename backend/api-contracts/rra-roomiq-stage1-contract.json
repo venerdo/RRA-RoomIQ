@@ -3,7 +3,7 @@
   "project": "RRA RoomIQ",
   "stage": "Stage 5",
   "status": "stage-5-in-progress",
-  "stageStatusReason": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 persistence and S5-02 calendar/window APIs are complete; S5-03 holiday/closure APIs are next.",
+  "stageStatusReason": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-04 are complete; S5-05 scheduling-constraint validation is next.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -586,7 +586,7 @@
         "cleanFullReactor": "mvn -f backend/pom.xml clean test passed 25 suites and 69 tests across all 11 reactor projects, zero failures/errors/skips."
       },
       "architectureAndErd": "No unauthorized ERD or service-boundary changes were made; the approved SRS and ERD remain unchanged during S3-11.",
-      "stageAcceptance": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 is complete; S5-02 is next."
+      "stageAcceptance": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-04 are complete; S5-05 is next."
     }
   },
   "stage4Progress": {
@@ -891,11 +891,46 @@
     },
     "S5-03": {
       "name": "Holiday and closure management APIs",
-      "status": "planned"
+      "status": "complete",
+      "holidayOperations": [
+        "GET /api/v1/holidays",
+        "POST /api/v1/holidays",
+        "GET /api/v1/holidays/{holidayId}",
+        "PUT /api/v1/holidays/{holidayId}",
+        "DELETE /api/v1/holidays/{holidayId}"
+      ],
+      "closurePeriodOperations": [
+        "GET /api/v1/closure-periods",
+        "POST /api/v1/closure-periods",
+        "GET /api/v1/closure-periods/{closurePeriodId}",
+        "PUT /api/v1/closure-periods/{closurePeriodId}",
+        "DELETE /api/v1/closure-periods/{closurePeriodId}"
+      ],
+      "scopesAndBehavior": "Holidays may be calendar-scoped, building-scoped, scoped to a calendar/building intersection, or nationwide when both IDs are null. Holiday active and blocksBooking state is mutable/filterable; creator attribution is returned by Identity, never supplied by the caller. Closure periods are building-scoped or nationwide with blocksBooking behavior and finite [startsAt, endsAt) ranges stored as PostgreSQL tstzrange.",
+      "integrity": "Flyway V3 adds a NULLS NOT DISTINCT unique index on calendar/building/date to reject duplicate holidays for an exact scope while retaining the ERD's calendar-date unique constraint. Calendar/building references remain scalar IDs except the local working_calendar foreign key.",
+      "authorization": "All /api/v1 operations delegate to Identity: active users may READ; MANAGE requires IDENTITY_SYSTEM_ADMIN. Holiday created_by_user_id comes from the authenticated Identity subject.",
+      "apiContract": "Ten versioned operations use Scheduling DTOs, ApiResponse/ApiError, X-Correlation-ID, and bearer-protected OpenAPI. Scheduling writes no Room maintenance or Booking reservation data.",
+      "verification": "Scheduling PostgreSQL/Testcontainers and API/OpenAPI authorization tests plus the full backend Java test gate passed with no test failures or errors.",
+      "requirementsAndErd": "No requirements or ERD change was needed."
     },
     "S5-04": {
       "name": "Recurrence persistence and validation",
-      "status": "planned"
+      "status": "complete",
+      "basePath": "/api/v1/recurrence-rules",
+      "operations": [
+        "GET /api/v1/recurrence-rules",
+        "POST /api/v1/recurrence-rules",
+        "GET /api/v1/recurrence-rules/{recurrenceRuleId}",
+        "PUT /api/v1/recurrence-rules/{recurrenceRuleId}",
+        "DELETE /api/v1/recurrence-rules/{recurrenceRuleId}",
+        "GET /api/v1/recurrence-rules/{recurrenceRuleId}/occurrences"
+      ],
+      "rruleModel": "Date-based RRULE supports FREQ=DAILY|WEEKLY|MONTHLY|YEARLY, INTERVAL, BYDAY weekday tokens without ordinal selectors, BYMONTHDAY, BYMONTH, WKST, UNTIL as a strict YYYYMMDD iCalendar DATE, and COUNT. Unknown, repeated, malformed, and unsupported fields are rejected. startsOn must match the rule pattern. At least one of UNTIL or COUNT is required; both may be supplied and constrain evaluation together. The existing ERD ends_on and occurrence_count columns persist the parsed UNTIL and COUNT values.",
+      "boundsAndEvaluation": "COUNT is limited to 365. UNTIL cannot exceed the inclusive horizon startsOn + 1 calendar year. Count-only rules must reach COUNT within that horizon. Rules exceeding either limit are rejected rather than truncated. Evaluation iterates bounded LocalDate values and returns deterministic local occurrence dates together with the IANA timezone; Africa/Kigali is the Rwanda calendar timezone. DST does not shift date-only occurrences. Evaluation does not create booking requests, confirmed reservations, or occupancy; each occurrence requires normal booking/scheduling validation.",
+      "authorization": "All operations delegate to the existing Scheduling Identity authorization policy: active users may READ; MANAGE requires IDENTITY_SYSTEM_ADMIN. created_by_user_id is derived from Identity's authenticated actor, never request data. Missing credentials and Identity failures fail closed.",
+      "apiContract": "Six versioned operations use Scheduling-owned DTOs, bounded list paging, shared ApiResponse/ApiError envelopes, X-Correlation-ID, and bearer-protected OpenAPI.",
+      "verification": "RecurrenceRuleApiTests passed 8 PostgreSQL Testcontainers API tests; the Scheduling suite passed 20 tests; Identity passed 37 tests and common-web 6 tests. The complete 11-module backend reactor passed all 128 tests with zero failures, errors, or skips.",
+      "requirementsAndErd": "No migration, requirements specification, or approved ERD change was required."
     },
     "S5-05": {
       "name": "Scheduling constraint validation API",
@@ -929,7 +964,7 @@
     },
     "userScope": "Scoped Admin user listing is filtered to eligible in-building Secretaries and unassigned pending users; single-user operations use the same policy checks.",
     "organizationPolicy": "POST /api/v1/internal/authorization/organization evaluates READ or MANAGE against the authenticated active Identity account and current system-admin permission.",
-    "schedulingPolicy": "POST /api/v1/internal/authorization/scheduling allows READ for active Identity accounts and requires IDENTITY_SYSTEM_ADMIN for MANAGE.",
+    "schedulingPolicy": "POST /api/v1/internal/authorization/scheduling allows READ for active Identity accounts and requires IDENTITY_SYSTEM_ADMIN for MANAGE; its actorUserId response supplies trusted Holiday creator attribution.",
     "roomManagementPolicy": "POST /api/v1/internal/authorization/room-management evaluates ROOM_MANAGE for a building scope or global system-admin authority for a null scope, then returns actorUserId from the authenticated principal.",
     "privilegeGrantor": "The authenticated actor is persisted as grantor; a client-supplied grantedByUserId is ignored.",
     "bootstrap": "No public Super Admin bootstrap endpoint exists."
@@ -945,7 +980,8 @@
     "roomPostmanValidator": "api-contracts/validate-room-postman-collection.mjs",
     "schedulingServiceReadme": "scheduling-service/README.md",
     "schedulingMigrationV1": "scheduling-service/src/main/resources/db/migration/V1__scheduling_schema.sql",
-    "schedulingMigrationV2": "scheduling-service/src/main/resources/db/migration/V2__one_calendar_per_building.sql"
+    "schedulingMigrationV2": "scheduling-service/src/main/resources/db/migration/V2__one_calendar_per_building.sql",
+    "schedulingMigrationV3": "scheduling-service/src/main/resources/db/migration/V3__holiday_scope_integrity.sql"
   },
   "commonResponseConvention": {
     "success": true,

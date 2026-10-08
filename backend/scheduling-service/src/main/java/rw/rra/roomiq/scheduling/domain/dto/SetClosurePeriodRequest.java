@@ -11,5 +11,5 @@ public record SetClosurePeriodRequest(
         @NotNull Instant startsAt,
         @NotNull Instant endsAt,
         @Size(max = 2000) String reason,
-        boolean blocksBooking) {
+        @NotNull Boolean blocksBooking) {
 }

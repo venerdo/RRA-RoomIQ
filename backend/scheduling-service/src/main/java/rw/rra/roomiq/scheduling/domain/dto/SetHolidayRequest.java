@@ -12,6 +12,6 @@ public record SetHolidayRequest(
         UUID officeBuildingId,
         @NotNull LocalDate holidayDate,
         @NotBlank @Size(max = 200) String name,
-        boolean blocksBooking,
-        boolean active) {
+        @NotNull Boolean blocksBooking,
+        @NotNull Boolean active) {
 }

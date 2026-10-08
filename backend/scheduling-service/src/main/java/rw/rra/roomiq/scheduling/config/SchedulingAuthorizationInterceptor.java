@@ -12,6 +12,7 @@ import rw.rra.roomiq.scheduling.integration.SchedulingAuthorizationClient;
 
 @Component
 public class SchedulingAuthorizationInterceptor implements HandlerInterceptor {
+    public static final String ACTOR_USER_ID_ATTRIBUTE = "schedulingAuthenticatedActorUserId";
     private final SchedulingAuthorizationClient authorizationClient;
 
     public SchedulingAuthorizationInterceptor(SchedulingAuthorizationClient authorizationClient) {
@@ -29,8 +30,8 @@ public class SchedulingAuthorizationInterceptor implements HandlerInterceptor {
             throw new DomainException(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED",
                     "Authentication is required");
         }
-        authorizationClient.authorize(authorization,
-                HttpMethod.GET.matches(request.getMethod()) ? "READ" : "MANAGE");
+        request.setAttribute(ACTOR_USER_ID_ATTRIBUTE, authorizationClient.authorize(authorization,
+            HttpMethod.GET.matches(request.getMethod()) ? "READ" : "MANAGE"));
         return true;
     }
 }

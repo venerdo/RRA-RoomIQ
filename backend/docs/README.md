@@ -2,11 +2,11 @@
 
 ## Implementation roadmap
 
-The authoritative end-to-end roadmap and Stage 2 through Stage 5 checklists and stage-gate rules are maintained in [Backend Documentation](../Documentation.md#end-to-end-implementation-roadmap). Stage 3 and Stage 4 are accepted; Stage 5 S5-01 and S5-02 are complete, with S5-03 next.
+The authoritative end-to-end roadmap and Stage 2 through Stage 5 checklists and stage-gate rules are maintained in [Backend Documentation](../Documentation.md#end-to-end-implementation-roadmap). Stage 3 and Stage 4 are accepted; Stage 5 S5-01 through S5-04 are complete, with S5-05 next.
 
 ## Stage 1 status
 
-Stage 1 is complete and verified. Stage 2 is complete through S2-18 verification. Stage 3 and Stage 4 are accepted. Stage 5 is in progress: S5-01 Scheduling persistence and S5-02 calendar/window APIs are complete; S5-03 is next. Scheduling owns calendar rules and availability; Room retains maintenance/status, while Booking owns reservation occupancy and its transactional conflict barrier in S6.
+Stage 1 is complete and verified. Stage 2 is complete through S2-18 verification. Stage 3 and Stage 4 are accepted. Stage 5 is in progress: S5-01 persistence through S5-04 recurrence APIs are complete; S5-05 is next. Scheduling owns calendar rules, bounded date-based recurrence evaluation, and availability; Room retains maintenance/status, while Booking owns reservation occupancy and its transactional conflict barrier in S6.
 
 ### SRS/ERD traceability
 
@@ -26,7 +26,7 @@ Identity implementation alignment with the authoritative Backend SRS, Final SRS,
 
 The `common-web` module is consumed by every service and provides the shared response, error, validation, OpenAPI, correlation-ID, exception-handling, and logging conventions.
 
-Organization Service owns its S3-01 schema, S3-02 persistence/domain model, S3-03 hierarchy integrity, S3-04 APIs, S3-05 validation/lifecycle policy, S3-06 authorization, and S3-07 API contract/OpenAPI completeness. S3-08 verified that Identity stores Organization references as identifiers only; S3-09 verified isolated Organization test coverage; S3-10 synchronized docs, contracts, and configuration notes; S3-11 clean service/Identity/shared/full-reactor verification passed. Stage 3 is accepted. Room Service S4-01 through S4-12 are implemented, documented, verified, and accepted. Scheduling S5-01 persistence and S5-02 calendar/window APIs are complete and verified; S5-03 is next.
+Organization Service owns its S3-01 schema, S3-02 persistence/domain model, S3-03 hierarchy integrity, S3-04 APIs, S3-05 validation/lifecycle policy, S3-06 authorization, and S3-07 API contract/OpenAPI completeness. S3-08 verified that Identity stores Organization references as identifiers only; S3-09 verified isolated Organization test coverage; S3-10 synchronized docs, contracts, and configuration notes; S3-11 clean service/Identity/shared/full-reactor verification passed. Stage 3 is accepted. Room Service S4-01 through S4-12 are implemented, documented, verified, and accepted. Scheduling S5-01 through S5-04 are complete and verified; recurrence uses the existing ERD table with one-year/365-occurrence bounds and does not create booking occupancy. S5-05 is next.
 
 S3-05 enforces nonblank/length and database uniqueness constraints, timezone path format plus service-validated IANA IDs with the `Africa/Kigali` default, active parent/child rules, recursive active-descendant protection, department subtree scope safety, and explicit nullable PUT semantics. Flyway V3/V4 add database checks; no ERD change was required. Organization/common-web passed 7 suites/20 tests and identity/common-web passed 12/37, with zero failures/errors/skips.
 

@@ -2,7 +2,7 @@
 
 ## Current scope
 
-S3-01 through S3-11 verification is complete and Stage 3 is accepted. This service owns the Flyway schema, matching JPA model, hierarchy-integrity and validation rules, versioned CRUD/query APIs, Identity-delegated endpoint enforcement, the complete 38-operation API contract, verified identifier-only references across the Identity boundary, 21 tests using isolated test configuration, and synchronized service/API/ERD documentation for countries, provinces, districts, office buildings, floors, and departments. Room Service S4-01 through S4-12 documentation and verification is complete and Stage 4 is accepted. Scheduling S5-01 persistence and S5-02 calendar/window APIs are complete and verified; S5-03 is next. No Organization or ERD change was required.
+S3-01 through S3-11 verification is complete and Stage 3 is accepted. This service owns the Flyway schema, matching JPA model, hierarchy-integrity and validation rules, versioned CRUD/query APIs, Identity-delegated endpoint enforcement, the complete 38-operation API contract, verified identifier-only references across the Identity boundary, 21 tests using isolated test configuration, and synchronized service/API/ERD documentation for countries, provinces, districts, office buildings, floors, and departments. Room Service S4-01 through S4-12 documentation and verification is complete and Stage 4 is accepted. Scheduling S5-01 through S5-04 are complete and verified; S5-05 is next. No Organization or ERD change was required.
 
 ## Persistence boundary
 

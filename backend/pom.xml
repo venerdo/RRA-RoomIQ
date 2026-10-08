@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>rw.rra.roomiq</groupId>
+    <artifactId>roomiq-backend</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <common-web.version>1.0.0-SNAPSHOT</common-web.version>
+    </properties>
+
+    <name>RRA RoomIQ Backend</name>
+    <description>Multi-service backend foundation for RRA RoomIQ</description>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>rw.rra.roomiq</groupId>
+                <artifactId>common-web</artifactId>
+                <version>${common-web.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <modules>
+        <module>common-web</module>
+        <module>identity-service</module>
+        <module>api-gateway</module>
+        <module>organization-service</module>
+        <module>room-service</module>
+        <module>scheduling-service</module>
+        <module>booking-service</module>
+        <module>notification-service</module>
+        <module>audit-service</module>
+        <module>analytics-service</module>
+    </modules>
+</project>

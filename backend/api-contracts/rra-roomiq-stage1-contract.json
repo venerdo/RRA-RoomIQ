@@ -1,0 +1,1401 @@
+{
+  "apiVersion": "1.0.0",
+  "project": "RRA RoomIQ",
+  "stage": "Stage 5",
+  "status": "stage-5-in-progress",
+  "stageStatusReason": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 persistence and S5-02 calendar/window APIs are complete; S5-03 holiday/closure APIs are next.",
+  "stage2Progress": {
+    "S2-01": {
+      "name": "Identity schema migration",
+      "status": "complete",
+      "migration": "identity-service/src/main/resources/db/migration/V1__identity_schema.sql",
+      "tables": [
+        "app_user",
+        "role",
+        "permission",
+        "role_permission",
+        "user_role",
+        "user_privilege",
+        "user_session"
+      ]
+    },
+    "S2-02": {
+      "name": "Identity domain entities",
+      "status": "complete",
+      "entities": [
+        "AppUser",
+        "Role",
+        "Permission",
+        "RolePermission",
+        "UserRole",
+        "UserPrivilege",
+        "UserSession"
+      ],
+      "verification": "Identity H2 persistence test verifies entity registration, relationships, audit defaults, optimistic versioning, and soft-delete filtering."
+    },
+    "S2-03": {
+      "name": "Identity repositories",
+      "status": "complete",
+      "repositories": [
+        "AppUserRepository",
+        "RoleRepository",
+        "PermissionRepository",
+        "RolePermissionRepository",
+        "UserRoleRepository",
+        "UserPrivilegeRepository",
+        "UserSessionRepository"
+      ],
+      "verification": "H2 repository test verifies identity lookups, status/scope queries, relationship queries, active privileges/sessions, refresh-token lookup, and soft-delete filtering."
+    },
+    "S2-04": {
+      "name": "User request and response DTOs",
+      "status": "complete",
+      "dtoTypes": [
+        "CreateUserRequest",
+        "UpdateUserRequest",
+        "ChangeUserStatusRequest",
+        "UserListQuery",
+        "UserResponse",
+        "UserListResponse"
+      ],
+      "validation": "Jakarta Bean Validation with shared ApiError and structured ValidationError field/message details.",
+      "securityRule": "User response DTOs do not expose password or passwordHash fields.",
+      "verification": "Focused DTO tests verify valid requests, invalid requests, status/list validation, shared error formatting, and response field safety."
+    },
+    "S2-05": {
+      "name": "User management APIs",
+      "status": "complete",
+      "basePath": "/api/v1/users",
+      "operations": [
+        "POST /api/v1/users",
+        "GET /api/v1/users",
+        "GET /api/v1/users/{id}",
+        "PATCH /api/v1/users/{id}",
+        "PATCH /api/v1/users/{id}/status",
+        "DELETE /api/v1/users/{id}"
+      ],
+      "behavior": "Create defaults users to PENDING; updates are partial; deletion is soft; supplied passwords are BCrypt encoded; responses use ApiResponse<T>.",
+      "errors": "Validation, not-found, and duplicate-identifier errors use the shared ApiError shape.",
+      "verification": "H2 MockMvc tests cover the complete user lifecycle, filtering, DTO validation, conflict/not-found errors, and password encoding."
+    },
+    "S2-06": {
+      "name": "Role and permission management",
+      "status": "complete",
+      "operations": [
+        "POST /api/v1/roles",
+        "GET /api/v1/roles",
+        "POST /api/v1/permissions",
+        "GET /api/v1/permissions",
+        "POST /api/v1/roles/{roleId}/permissions/{permissionId}",
+        "GET /api/v1/roles/{roleId}/permissions",
+        "DELETE /api/v1/roles/{roleId}/permissions/{permissionId}",
+        "POST /api/v1/users/{userId}/roles",
+        "GET /api/v1/users/{userId}/roles",
+        "DELETE /api/v1/users/{userId}/roles/{assignmentId}"
+      ],
+      "duplicatePolicy": "Duplicate role codes, permission codes, role-permission pairs, and user-role assignments in the same scope return HTTP 409 with ApiError.",
+      "verification": "H2 MockMvc tests verify definitions, scoped assignment persistence/list/revoke, duplicate rejection, and validation error envelopes."
+    },
+    "S2-07": {
+      "name": "Privilege management",
+      "status": "complete",
+      "basePath": "/api/v1/users/{userId}/privileges",
+      "operations": [
+        "POST /api/v1/users/{userId}/privileges",
+        "GET /api/v1/users/{userId}/privileges",
+        "GET /api/v1/users/{userId}/privileges/evaluate?privilegeCode=CG_BOOKING&at={instant}",
+        "DELETE /api/v1/users/{userId}/privileges/{privilegeId}"
+      ],
+      "evaluationRule": "A privilege is effective for ACTIVE users when active=true and validFrom <= at < validTo; either bound may be null.",
+      "duplicatePolicy": "Overlapping active grants for the same user and privilege code conflict; adjacent windows are allowed; revoked grants do not block regranting.",
+      "verification": "H2 MockMvc tests cover validity boundaries, inactive user denial, overlap/adjacency, revoke history, and regrant."
+    },
+    "S2-08": {
+      "name": "Password security",
+      "status": "complete",
+      "passwordPolicy": "12-72 printable ASCII characters with lowercase, uppercase, digit, and symbol.",
+      "hashing": "BCrypt work factor 12; plaintext is not persisted or returned.",
+      "accountStatus": "Only ACTIVE users with a stored password hash are enabled by identity-backed UserDetailsService.",
+      "deferredCredentialLifecycle": [
+        "credential expiry",
+        "password recovery/reset",
+        "login throttling"
+      ],
+      "verification": "Focused tests verify policy validation, BCrypt matching and work factor, no response hash field, and PENDING/ACTIVE/SUSPENDED authentication eligibility."
+    },
+    "S2-09": {
+      "name": "Authentication",
+      "status": "complete",
+      "tokenStrategy": "HS256 JWT access token (15 minutes) plus cryptographically random opaque refresh token (7 days), rotated on refresh.",
+      "refreshStorage": "Only SHA-256 refresh-token hashes are persisted in user_session.",
+      "sessionEnforcement": "JWT validation checks the referenced database session is unrevoked, unexpired, and belongs to an ACTIVE user.",
+      "operations": [
+        "POST /api/v1/auth/login",
+        "POST /api/v1/auth/refresh",
+        "POST /api/v1/auth/logout"
+      ],
+      "verification": "H2 integration tests cover successful login, invalid credentials and statuses, token rotation, replay rejection, logout, and access-token revocation."
+    },
+    "S2-10": {
+      "name": "Session management",
+      "status": "complete",
+      "storedFields": [
+        "refreshTokenHash (SHA-256 only)",
+        "issuedAt",
+        "expiresAt",
+        "revokedAt",
+        "ipAddress",
+        "userAgent"
+      ],
+      "lifecycle": "Refresh revokes the previous session and creates a replacement; logout and expired/ineligible refresh attempts persist revocation.",
+      "refreshTokenLifetime": "P7D",
+      "verification": "Focused H2 auth tests verify token hash-only persistence, seven-day expiry, IP/user-agent capture, rotation revocation, logout revocation, and expired-session revocation."
+    },
+    "S2-11": {
+      "name": "Authorization policies",
+      "status": "complete",
+      "policy": {
+        "superAdmin": "Global identity and building scope through IDENTITY_SYSTEM_ADMIN.",
+        "admin": "Building-scoped identity and operational actions; may manage Secretaries and unassigned pending users, cannot administer definitions or privileged accounts, and may grant/revoke only CG_BOOKING within scope.",
+        "secretary": "Own profile and eligible own-booking actions; booking requests require active account, matching department/building, and CG_BOOKING for VIP workflows.",
+        "default": "Deny unless a current database-backed permission and required scope authorize the operation."
+      },
+      "permissionCodes": [
+        "IDENTITY_SYSTEM_ADMIN",
+        "IDENTITY_USER_READ",
+        "IDENTITY_USER_MANAGE",
+        "IDENTITY_USER_ROLE_READ",
+        "IDENTITY_USER_ROLE_ASSIGN",
+        "IDENTITY_PRIVILEGE_READ",
+        "IDENTITY_PRIVILEGE_GRANT",
+        "IDENTITY_ROLE_READ",
+        "IDENTITY_ROLE_MANAGE",
+        "IDENTITY_PERMISSION_READ",
+        "IDENTITY_PERMISSION_MANAGE",
+        "IDENTITY_ROLE_PERMISSION_MANAGE",
+        "BOOKING_REQUEST_CREATE",
+        "BOOKING_DIRECT_CREATE",
+        "BOOKING_APPROVE",
+        "BOOKING_CANCEL",
+        "BOOKING_CANCEL_OWN",
+        "BOOKING_EXTENSION_REQUEST",
+        "BOOKING_EXTENSION_DECIDE",
+        "ROOM_MANAGE"
+      ],
+      "privilegeCode": "CG_BOOKING",
+      "bootstrap": "No public bootstrap endpoint. Establish the first active SUPER_ADMIN through the documented one-time operator/database procedure.",
+      "verification": "H2 MockMvc authorization tests cover building boundaries, scoped list filtering, role escalation denial, privilege grantor integrity, CG_BOOKING restrictions, live permission revocation, booking rules, and global Super Admin access."
+    },
+    "S2-12": {
+      "name": "Spring Security route policy",
+      "status": "complete",
+      "publicRoutes": [
+        "POST /api/v1/auth/login",
+        "POST /api/v1/auth/refresh",
+        "POST /api/v1/auth/logout",
+        "GET /v3/api-docs/**",
+        "GET /swagger-ui/**",
+        "GET /swagger-ui.html",
+        "GET /actuator/health"
+      ],
+      "protectedDefault": "Every other request requires a valid bearer access token; method-level permission and scope checks apply to protected operations.",
+      "disabledDefaults": [
+        "form login",
+        "HTTP Basic",
+        "Spring generated /logout",
+        "CSRF for the stateless bearer-token API"
+      ],
+      "unauthenticatedResponse": "HTTP 401 AUTHENTICATION_REQUIRED in the shared ApiError envelope with correlation ID.",
+      "accessDeniedResponse": "HTTP 403 ACCESS_DENIED in the shared ApiError envelope with correlation ID.",
+      "verification": "Focused MockMvc tests verify public auth/docs/health routes, protected user and unknown/default routes, and login without CSRF."
+    },
+    "S2-13": {
+      "name": "OpenAPI identity documentation",
+      "status": "complete",
+      "openApiDocument": "/v3/api-docs",
+      "swaggerUi": "/swagger-ui/index.html",
+      "operationCount": 26,
+      "tags": [
+        "Authentication",
+        "Users",
+        "Roles and permissions",
+        "User privileges",
+        "Internal authorization"
+      ],
+      "securityScheme": {
+        "name": "bearerAuth",
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "securityRequirements": "Protected user, role/permission, privilege, and internal authorization operations require bearerAuth; login, refresh, and logout are public and omit operation-level security.",
+      "schemasAndResponses": "Springdoc publishes request/response DTO schemas and documented validation, authentication, authorization, not-found, and conflict responses.",
+      "verification": "AuthenticationControllerTests inspect /v3/api-docs and verify all 26 operations, operation summaries, DTO schema, JWT scheme, tags, and public/protected security requirements, including the Scheduling authorization endpoint."
+    },
+    "S2-14": {
+      "name": "Identity error and audit behavior",
+      "status": "complete",
+      "errorContract": "Domain failures use stable ApiError codes; auth and authorization filters preserve correlation IDs; unexpected errors do not expose exception messages or stack traces.",
+      "domainErrorCodes": [
+        "AUTHENTICATION_FAILED",
+        "INVALID_REFRESH_TOKEN",
+        "USER_NOT_FOUND",
+        "DUPLICATE_USER_IDENTIFIER",
+        "ROLE_CODE_CONFLICT",
+        "PERMISSION_CODE_CONFLICT",
+        "ROLE_PERMISSION_CONFLICT",
+        "USER_ROLE_CONFLICT",
+        "USER_PRIVILEGE_NOT_FOUND",
+        "PRIVILEGE_GRANT_CONFLICT",
+        "PRIVILEGE_ALREADY_INACTIVE",
+        "INVALID_PRIVILEGE_VALIDITY_WINDOW"
+      ],
+      "correlationId": "1-128 ASCII letters, digits, dots, underscores, or hyphens; invalid/missing values are replaced and shared by request, response, error envelope, and MDC.",
+      "auditOutbox": {
+        "migration": "identity-service/src/main/resources/db/migration/V2__identity_audit_outbox.sql",
+        "table": "identity_audit_outbox",
+        "exchange": "roomiq.events.v1",
+        "routingKey": "audit.identity",
+        "queue": "roomiq.audit.identity.v1",
+        "schemaVersion": 1,
+        "delivery": "Persistent at-least-once messages; event is marked published only after a positive correlated publisher confirm and no mandatory return; failed, NACKed, timed-out, or unroutable sends retry with capped exponential backoff; consumers deduplicate by eventId.",
+        "redaction": "Password, password hash, access/refresh token, email, and profile values are excluded from audit metadata.",
+        "events": [
+          "AUTHENTICATION_SUCCEEDED",
+          "AUTHENTICATION_FAILED",
+          "REFRESH_TOKEN_ROTATED",
+          "REFRESH_TOKEN_REJECTED",
+          "AUTHENTICATION_LOGOUT",
+          "AUTHORIZATION_DENIED",
+          "IDENTITY_USER_CREATED",
+          "IDENTITY_USER_UPDATED",
+          "IDENTITY_USER_STATUS_CHANGED",
+          "IDENTITY_USER_SOFT_DELETED",
+          "IDENTITY_ROLE_CREATED",
+          "IDENTITY_PERMISSION_CREATED",
+          "IDENTITY_ROLE_PERMISSION_GRANTED",
+          "IDENTITY_ROLE_PERMISSION_REVOKED",
+          "IDENTITY_USER_ROLE_ASSIGNED",
+          "IDENTITY_USER_ROLE_REVOKED",
+          "IDENTITY_PRIVILEGE_GRANTED",
+          "IDENTITY_PRIVILEGE_REVOKED"
+        ]
+      },
+      "verification": "Focused error, correlation, authentication/user audit-redaction, entity registration, and outbox publish/retry tests pass; full identity/reactor regression is tracked in backend documentation."
+    },
+    "S2-15": {
+      "name": "Automated identity tests",
+      "status": "complete",
+      "coverage": [
+        "unit error and correlation behavior",
+        "outbox publisher confirm, mandatory return and retry behavior",
+        "repository relationships and soft-delete queries",
+        "Flyway V1/V2 schema migration and audit outbox persistence",
+        "user, role, permission, assignment and privilege controller APIs",
+        "authentication, session, refresh rotation/replay, logout and JWT security",
+        "scoped authorization, privilege enforcement and denial auditing",
+        "safe error responses and audit payload redaction"
+      ],
+      "testDatabase": "Isolated H2 databases with Flyway migrations enabled.",
+      "externalServices": "RabbitMQ confirm behavior is unit tested with a mocked RabbitTemplate; no live broker integration environment is part of S2-15.",
+      "verification": "Clean identity/common-web Maven run passed 12 Surefire suites and 37 tests; clean full backend reactor passed 20 suites and 45 tests, all with zero failures/errors."
+    },
+    "S2-16": {
+      "name": "Postman contract and sample data",
+      "status": "complete",
+      "postmanCollection": "api-contracts/rra-roomiq-identity-postman-collection.json",
+      "coverage": [
+        "public auth login, refresh, and logout flows with local-safe placeholders",
+        "user create, list, read, update, status change, and soft-delete examples",
+        "role and permission create/list/grant/revoke workflows",
+        "user role assignment and revocation flows",
+        "user privilege grant, evaluation, list, and revoke flows",
+        "collection-level variables for base URL, tokens, IDs, and correlation tracking"
+      ],
+      "sampleDataPolicy": "Sample payloads use placeholder values and approved local test identities only; no real secrets or production credentials are included.",
+      "verification": "The collection is valid Postman v2.1 JSON and passes node api-contracts/validate-identity-postman-collection.mjs; it exercises all implemented identity endpoints with chained token/resource capture, safe example.test payloads, bearer auth, and correlation headers."
+    },
+    "S2-17": {
+      "name": "Documentation synchronization and SRS/ERD alignment",
+      "status": "complete",
+      "alignmentDocument": "docs/identity-srs-erd-alignment.md",
+      "authoritativeSources": [
+        "Requirements/RRA_RoomIQ_Backend_Requirements_Specification.docx",
+        "Requirements/RRA_RoomIQ_Final_Requirements_Specification.docx",
+        "Requirements/RRA_RoomIQ_ERD_v2.mmd"
+      ],
+      "erdChange": "None. The approved ERD remains unchanged; identity_audit_outbox is documented as service-local infrastructure and AUDIT_EVENT remains Audit Service-owned.",
+      "synchronizedSurfaces": [
+        "backend/Documentation.md",
+        "backend/docs/README.md",
+        "backend/docs/identity-srs-erd-alignment.md",
+        "backend/identity-service/Documentation.md",
+        "backend/identity-service/AUTHORIZATION.md",
+        "backend/common-web/README.md",
+        "backend/api-contracts/README.md",
+        "backend/api-contracts/rra-roomiq-stage1-contract.json"
+      ],
+      "verification": "Documentation and JSON contract diagnostics pass; implementation/test totals remain 12 identity/common-web suites and 37 tests, and 20 full-reactor suites and 45 tests with zero failures/errors."
+    },
+    "S2-18": {
+      "name": "Stage 2 verification gate",
+      "status": "complete",
+      "identityVerification": "12 identity/common-web Surefire suites and 37 tests passed with zero failures/errors.",
+      "reactorVerification": "20 full backend Surefire suites and 45 tests passed with zero failures/errors.",
+      "regressionStatus": "Stage 1 shared conventions and all service smoke tests remain green.",
+      "nextGate": "S3-01 through S3-06 are complete; S3-07 is next."
+    }
+  },
+  "stage3Progress": {
+    "S3-01": {
+      "name": "Organization schema migration",
+      "status": "complete",
+      "migration": "organization-service/src/main/resources/db/migration/V1__organization_schema.sql",
+      "tables": [
+        "country",
+        "province",
+        "district",
+        "office_building",
+        "floor",
+        "department"
+      ],
+      "schema": "UUID primary keys; ERD-defined timestamps and active/status fields; scoped uniqueness; service-local hierarchy foreign keys.",
+      "externalReferences": "office_building.working_calendar_id is an identifier only; Working Calendar is outside Organization Service ownership.",
+      "approvedErdChange": "Added required created_at timestamp to FLOOR to satisfy S3-01.",
+      "verification": "OrganizationSchemaMigrationTests validates Flyway V1, required columns, hierarchy foreign keys, uniqueness, and the ID-only calendar reference using H2 PostgreSQL mode."
+    },
+    "S3-02": {
+      "name": "Organization JPA domain model",
+      "status": "complete",
+      "entities": [
+        "Country",
+        "Province",
+        "District",
+        "OfficeBuilding",
+        "Floor",
+        "Department"
+      ],
+      "mappedSuperclass": "OrganizationEntity",
+      "enum": "DepartmentStatus",
+      "repositories": [
+        "CountryRepository",
+        "ProvinceRepository",
+        "DistrictRepository",
+        "OfficeBuildingRepository",
+        "FloorRepository",
+        "DepartmentRepository"
+      ],
+      "dtoPattern": "Validated Create<Entity>Request and <Entity>Response records for each organization entity.",
+      "mapper": "OrganizationMapper",
+      "ownership": "Entities and JPA relationships are Organization Service-local; working_calendar_id remains UUID-only.",
+      "verification": "Hibernate validates mappings against Flyway V1; focused organization verification passed 3 suites/4 tests, identity/common-web passed 12 suites/37 tests, and full reactor passed 22 suites/48 tests with zero failures/errors; full reactor build succeeded."
+    },
+    "S3-03": {
+      "name": "Organization hierarchy integrity",
+      "status": "complete",
+      "geographicForeignKeys": [
+        "province.country_id -> country.id",
+        "district.province_id -> province.id",
+        "office_building.district_id -> district.id",
+        "floor.office_building_id -> office_building.id"
+      ],
+      "departmentParent": {
+        "foreignKey": "department.parent_department_id -> department.id",
+        "databaseCheck": "V2 prevents direct self-parenting.",
+        "serviceRules": "Department.reparent rejects self/ancestor cycles and parents outside the same nullable office-building scope.",
+        "concurrency": "DepartmentHierarchyService validates and reassigns within a serializable transaction while pessimistically locking hierarchy rows."
+      },
+      "externalReferences": "office_building.working_calendar_id remains identifier-only.",
+      "verification": "Focused organization tests passed 3 suites/5 tests, identity/common-web passed 12 suites/37 tests, and full reactor passed 22 suites/49 tests with zero failures/errors; reactor package build succeeded."
+    },
+    "S3-04": {
+      "name": "Organization CRUD and hierarchy APIs",
+      "status": "complete",
+      "basePath": "/api/v1",
+      "resources": [
+        "countries",
+        "provinces",
+        "districts",
+        "office-buildings",
+        "floors",
+        "departments"
+      ],
+      "operations": [
+        "POST collection create",
+        "GET collection with search/filter/page/sort",
+        "GET /{id}",
+        "PUT /{id}",
+        "PATCH /{id}/status",
+        "DELETE /{id}"
+      ],
+      "departmentOperations": [
+        "PATCH /api/v1/departments/{id}/parent",
+        "PATCH /api/v1/departments/{id}/status"
+      ],
+      "hierarchy": "GET /api/v1/countries/{id}/hierarchy returns a single country-rooted location tree with floors and nested departments.",
+      "queryDefaults": "page=0, size=20, maximum size=100; sort fields are allow-listed per resource and search is server-side.",
+      "deletePolicy": "Referenced parent records return ORGANIZATION_RESOURCE_CONFLICT; no cascading hierarchy deletion.",
+      "authorizationBoundary": "Organization endpoint authorization was implemented separately under S3-06.",
+      "verification": "OrganizationCrudApiTests covers create/get/update/delete/status, search/filter/page/sort, hierarchy retrieval, and delete conflicts. Focused Organization tests passed 4 suites/6 tests, identity/common-web passed 12/37, and full reactor passed 23/50 with zero failures/errors; package build succeeded."
+    },
+    "S3-05": {
+      "name": "Organization validation and lifecycle rules",
+      "status": "complete",
+      "migration": "organization-service/src/main/resources/db/migration/V3__organization_validation_constraints.sql",
+      "additionalMigration": "organization-service/src/main/resources/db/migration/V4__office_building_timezone_format.sql",
+      "databaseConstraints": [
+        "Nonblank country, province, district, office-building, floor, and department names",
+        "Nonblank office-building and department codes",
+        "Nonblank office-building timezone and timezone path format",
+        "Existing ERD uniqueness scopes retained and tested",
+        "DTO maximum lengths match persisted VARCHAR column lengths"
+      ],
+      "serviceValidation": {
+        "countryIsoCode": "Optional two-letter ASCII ISO alpha-2 code; normalized uppercase; blank or whitespace-only clears to null.",
+        "timezone": "Must be an available IANA timezone ID; null or blank selects Africa/Kigali; surrounding whitespace is trimmed. Database checks enforce nonblank path syntax; service validation enforces IANA membership.",
+        "parentActivity": "An active child requires an active parent; parent deactivation is rejected while any active descendant exists; reactivation requires an active immediate parent.",
+        "departmentHierarchy": "Same-building scope and cycle checks remain enforced; changing a department building while it has children returns DEPARTMENT_SCOPE_HAS_CHILDREN; deactivation checks active descendants.",
+        "putSemantics": "Null active preserves current state; blank optional address/ISO values clear to null; null or blank timezone selects the default; null workingCalendarId and department parent clear those optional values; required values remain required."
+      },
+      "stableErrors": [
+        "INVALID_TIMEZONE",
+        "ORGANIZATION_PARENT_INACTIVE",
+        "ORGANIZATION_ACTIVE_CHILDREN",
+        "DEPARTMENT_SCOPE_HAS_CHILDREN",
+        "ORGANIZATION_RESOURCE_CONFLICT"
+      ],
+      "authorizationBoundary": "S3-06; organization endpoint authorization was not changed by S3-05.",
+      "erdChange": "None. V3 and V4 add constraints only; no fields, tables, or relationships changed.",
+      "verification": "After V4 and DTO gap fixes, Organization/common-web passed 7 suites/20 tests and identity/common-web passed 12 suites/37 tests with zero failures/errors/skips."
+    },
+    "S3-06": {
+      "name": "Organization authorization",
+      "status": "complete",
+      "identityDecisionEndpoint": "POST /api/v1/internal/authorization/organization",
+      "enforcement": "Organization Service intercepts every /api/v1 request and forwards the original bearer token to Identity Service; authorization is checked server-side on every request.",
+      "readPolicy": "Only active identity accounts may read organization data.",
+      "mutationPolicy": "Mutations require the current unscoped IDENTITY_SYSTEM_ADMIN permission; scoped Admin permissions do not authorize location hierarchy changes.",
+      "failureBehavior": "Missing/invalid credentials return 401, policy denial returns 403, and Identity Service outages fail closed with 503.",
+      "dataOwnership": "Organization Service owns organization persistence; authorization decisions use Identity APIs and never cross-service database access.",
+      "erdChange": "None.",
+      "verification": "Organization/common-web passed 8 suites/24 tests; identity/common-web passed 13 suites/40 tests; full reactor passed 25 suites/65 tests, all with zero failures/errors/skips."
+    },
+    "S3-07": {
+      "name": "Organization API contract and OpenAPI completeness",
+      "status": "complete",
+      "basePath": "/api/v1",
+      "operationCount": 38,
+      "openApi": "/v3/api-docs",
+      "swaggerUi": "/swagger-ui/index.html",
+      "security": "Every organization operation declares Identity bearer JWT authentication; Organization delegates each request to Identity using the original bearer token.",
+      "requestDtos": [
+        "CreateCountryRequest",
+        "CreateProvinceRequest",
+        "CreateDistrictRequest",
+        "CreateOfficeBuildingRequest",
+        "CreateFloorRequest",
+        "CreateDepartmentRequest",
+        "OrganizationPageQuery",
+        "SetActiveRequest",
+        "SetDepartmentStatusRequest",
+        "SetDepartmentParentRequest"
+      ],
+      "responseContract": "Successful operations use shared ApiResponse<T>; errors use shared ApiError with code, safe message, path, status, correlationId, validationErrors, and timestamp.",
+      "validation": "Controller request bodies and query parameters use Jakarta Bean Validation. Page defaults to 0, size defaults to 20 and is capped at 100; sort fields are resource-allow-listed.",
+      "correlation": "X-Correlation-ID is documented as an optional request header and echoed in each operation response; accepted values are 1-128 ASCII letters, digits, dots, underscores, or hyphens.",
+      "stableErrorCodes": {
+        "400": ["VALIDATION_ERROR", "CONSTRAINT_VIOLATION", "INVALID_REQUEST", "INVALID_SORT_FIELD", "INVALID_TIMEZONE"],
+        "401": ["AUTHENTICATION_REQUIRED"],
+        "403": ["ACCESS_DENIED"],
+        "404": ["COUNTRY_NOT_FOUND", "PROVINCE_NOT_FOUND", "DISTRICT_NOT_FOUND", "OFFICE_BUILDING_NOT_FOUND", "FLOOR_NOT_FOUND", "DEPARTMENT_NOT_FOUND", "DEPARTMENT_PARENT_NOT_FOUND"],
+        "409": ["ORGANIZATION_RESOURCE_CONFLICT", "ORGANIZATION_PARENT_INACTIVE", "ORGANIZATION_ACTIVE_CHILDREN", "INVALID_DEPARTMENT_PARENT", "DEPARTMENT_SCOPE_HAS_CHILDREN", "INVALID_DEPARTMENT_HIERARCHY"],
+        "500": ["INTERNAL_ERROR"],
+        "503": ["IDENTITY_AUTHORIZATION_UNAVAILABLE"]
+      },
+      "resources": {
+        "countries": ["POST /api/v1/countries", "GET /api/v1/countries", "GET /api/v1/countries/{id}", "PUT /api/v1/countries/{id}", "PATCH /api/v1/countries/{id}/status", "DELETE /api/v1/countries/{id}", "GET /api/v1/countries/{id}/hierarchy"],
+        "provinces": ["POST /api/v1/provinces", "GET /api/v1/provinces", "GET /api/v1/provinces/{id}", "PUT /api/v1/provinces/{id}", "PATCH /api/v1/provinces/{id}/status", "DELETE /api/v1/provinces/{id}"],
+        "districts": ["POST /api/v1/districts", "GET /api/v1/districts", "GET /api/v1/districts/{id}", "PUT /api/v1/districts/{id}", "PATCH /api/v1/districts/{id}/status", "DELETE /api/v1/districts/{id}"],
+        "officeBuildings": ["POST /api/v1/office-buildings", "GET /api/v1/office-buildings", "GET /api/v1/office-buildings/{id}", "PUT /api/v1/office-buildings/{id}", "PATCH /api/v1/office-buildings/{id}/status", "DELETE /api/v1/office-buildings/{id}"],
+        "floors": ["POST /api/v1/floors", "GET /api/v1/floors", "GET /api/v1/floors/{id}", "PUT /api/v1/floors/{id}", "PATCH /api/v1/floors/{id}/status", "DELETE /api/v1/floors/{id}"],
+        "departments": ["POST /api/v1/departments", "GET /api/v1/departments", "GET /api/v1/departments/{id}", "PUT /api/v1/departments/{id}", "PATCH /api/v1/departments/{id}/status", "PATCH /api/v1/departments/{id}/parent", "DELETE /api/v1/departments/{id}"]
+      },
+      "verification": "OrganizationCrudApiTests checks the live OpenAPI schema, complete operation set, bearer security, shared error schemas, stable error documentation, and correlation headers; API tests verify DTO validation and ApiResponse/ApiError behavior."
+    },
+    "S3-08": {
+      "name": "Cross-service identifier-only references",
+      "status": "complete",
+      "identityOrganizationReferences": {
+        "appUser.departmentId": "UUID scalar mapped to department_id; no JPA relationship or database foreign key.",
+        "appUser.officeBuildingId": "UUID scalar mapped to office_building_id; no JPA relationship or database foreign key.",
+        "userRole.scopeOfficeBuildingId": "UUID scalar mapped to scope_office_building_id; no JPA relationship or database foreign key."
+      },
+      "ownership": "Identity owns identity tables and Organization owns organization tables. Identity persistence has no organization tables, shared organization entities, or cross-service foreign keys. Organization-owned hierarchy foreign keys remain local to Organization Service.",
+      "validationBoundary": "Identity stores supplied organization IDs without querying Organization persistence. Cross-service existence and lifecycle validation must be performed through an approved Organization API/event integration when required by a later requirement; no such validation is introduced here.",
+      "verification": "IdentityRepositoryTests persists unbacked department/building UUIDs and a scoped role assignment, asserts JPA metamodel attributes are UUID scalars, checks identity Flyway FK metadata, and confirms organization tables/entities are absent."
+    },
+    "S3-09": {
+      "name": "Organization regression and isolated test configuration",
+      "status": "complete",
+      "testProfile": {
+        "database": "H2 in-memory database with PostgreSQL compatibility mode and DB_CLOSE_DELAY=-1.",
+        "schemaManagement": "Flyway migrations V1-V4 enabled; Hibernate ddl-auto=validate.",
+        "externalAuthorization": "OrganizationAuthorizationClient is replaced with a controlled test double in API tests; interceptor behavior is also unit-tested."
+      },
+      "coverage": {
+        "OrganizationSchemaMigrationTests": "Four tests cover migration history, schema/columns/lengths, service-local foreign keys, checks and uniqueness scopes.",
+        "OrganizationDomainPersistenceTests": "Five tests cover JPA/repository mapping, DTO/timezone validation, hierarchy cycles/scopes, parent lifecycle, and nullable update behavior.",
+        "OrganizationAuthorizationInterceptorTests": "Three tests cover read/manage delegation and missing-token rejection.",
+        "OrganizationCrudApiTests": "Seven tests cover OpenAPI, authorization outcomes, CRUD/hierarchy, filtering/paging/sorting, invalid query validation, lifecycle, and error envelopes.",
+        "OrganizationServiceApplicationTests": "Two tests cover context startup and isolated H2/Flyway/schema-validation settings."
+      },
+      "verification": "All 21 Organization tests pass. The backend parent-reactor Java test run also passes, including Identity, common-web, Organization, and service smoke tests, with no failures/errors."
+    },
+    "S3-10": {
+      "name": "Organization documentation and contract synchronization",
+      "status": "complete",
+      "synchronizedDocumentation": [
+        "Documentation.md",
+        ".env.example",
+        "docs/README.md",
+        "docs/backend-architecture.md",
+        "docs/identity-srs-erd-alignment.md",
+        "docs/organization-srs-erd-alignment.md",
+        "organization-service/README.md",
+        "identity-service/Documentation.md",
+        "common-web/README.md",
+        "api-contracts/README.md",
+        "organization-service/src/main/resources/application.yml"
+      ],
+      "environmentConfiguration": {
+        "databaseVariables": ["DB_URL", "DB_USERNAME", "DB_PASSWORD"],
+        "identityServiceUrl": "IDENTITY_SERVICE_URL defaults to http://localhost:8081.",
+        "organizationPort": "ORGANIZATION_SERVICE_PORT defaults to 8082 and is listed in backend/.env.example.",
+        "testProfile": "Organization tests use H2 PostgreSQL compatibility mode, Flyway V1-V4, and Hibernate ddl-auto=validate."
+      },
+      "requirementsAndErd": "Authoritative requirements specifications and RRA_RoomIQ_ERD_v2.mmd were not modified; no ERD change was required.",
+      "changelog": "S3-10 completion recorded in backend/Documentation.md under 2026-10-03.",
+      "nextGate": "Stage 3 explicit user acceptance."
+    },
+    "S3-11": {
+      "name": "Stage 3 verification and acceptance gate",
+      "status": "complete",
+      "verification": {
+        "cleanOrganizationReactor": "mvn -f backend/pom.xml -pl organization-service -am clean test passed all 21 Organization tests.",
+        "identityRegression": "mvn -f backend/pom.xml -pl identity-service -am test passed common-web and Identity: 35 tests, zero failures/errors/skips.",
+        "cleanFullReactor": "mvn -f backend/pom.xml clean test passed 25 suites and 69 tests across all 11 reactor projects, zero failures/errors/skips."
+      },
+      "architectureAndErd": "No unauthorized ERD or service-boundary changes were made; the approved SRS and ERD remain unchanged during S3-11.",
+      "stageAcceptance": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 is complete; S5-02 is next."
+    }
+  },
+  "stage4Progress": {
+    "S4-01": {
+      "name": "Room and resource schema migration",
+      "status": "complete",
+      "migration": "room-service/src/main/resources/db/migration/V1__room_resource_schema.sql",
+      "tables": [
+        "room",
+        "room_type",
+        "facility_type",
+        "room_facility",
+        "room_photo",
+        "room_rule",
+        "room_rule_allowed_department",
+        "room_status_history",
+        "maintenance_period"
+      ],
+      "ownership": "Room-owned relationships use service-local foreign keys. Organization and user/actor references remain UUID identifiers without cross-service foreign keys.",
+      "maintenanceIntegrity": "PostgreSQL btree_gist exclusion constraint prevents overlapping maintenance ranges per room and allows adjacent ranges.",
+      "verification": "Room PostgreSQL Testcontainers suite passed 6 tests, including Hibernate schema validation and persistence/DTO round trips; Identity passed 35 tests, common-web passed 6 tests, and the full backend reactor test run passed."
+    },
+    "S4-02": {
+      "name": "Room persistence model and DTO mapping",
+      "status": "complete",
+      "entities": [
+        "RoomType",
+        "FacilityType",
+        "Room",
+        "RoomFacility",
+        "RoomPhoto",
+        "RoomRule",
+        "RoomRuleAllowedDepartment",
+        "RoomStatusHistory",
+        "MaintenancePeriod"
+      ],
+      "enums": ["RoomClass", "RoomStatus", "FacilityState"],
+      "repositories": [
+        "RoomTypeRepository",
+        "FacilityTypeRepository",
+        "RoomRepository",
+        "RoomFacilityRepository",
+        "RoomPhotoRepository",
+        "RoomRuleRepository",
+        "RoomRuleAllowedDepartmentRepository",
+        "RoomStatusHistoryRepository",
+        "MaintenancePeriodRepository"
+      ],
+      "dtoTypes": [
+        "RoomTypeDto",
+        "FacilityTypeDto",
+        "RoomDto",
+        "RoomFacilityDto",
+        "RoomPhotoDto",
+        "RoomRuleDto",
+        "RoomRuleAllowedDepartmentDto",
+        "RoomStatusHistoryDto",
+        "MaintenancePeriodDto"
+      ],
+      "mapper": "RoomMapper",
+      "ownership": "Room-owned relationships map as JPA associations. Organization and Identity references remain scalar UUIDs; no cross-service entities or foreign keys are introduced.",
+      "apiStatus": "No Room controllers or public endpoints are included in S4-02; API implementation is S4-03.",
+      "verification": "PostgreSQL Testcontainers verifies all nine JPA entities against Flyway V1, persistence round trips, and all nine DTO mappings."
+    },
+    "S4-03": {
+      "name": "Room and catalog API surface",
+      "status": "complete",
+      "basePath": "/api/v1",
+      "operations": [
+        "GET /api/v1/room-types",
+        "POST /api/v1/room-types",
+        "GET /api/v1/room-types/{id}",
+        "PUT /api/v1/room-types/{id}",
+        "GET /api/v1/facility-types",
+        "POST /api/v1/facility-types",
+        "GET /api/v1/facility-types/{id}",
+        "PUT /api/v1/facility-types/{id}",
+        "GET /api/v1/rooms",
+        "POST /api/v1/rooms",
+        "GET /api/v1/rooms/{id}",
+        "PUT /api/v1/rooms/{id}"
+      ],
+      "behavior": "Room type and facility type catalog records are dynamically managed; room listing supports filtering, pagination, and allow-listed sorting; responses use the shared ApiResponse wrapper.",
+      "verification": "The Room Service focused suite passed 7 tests, including room catalog CRUD and filter/page validation, with zero failures/errors."
+    },
+    "S4-04": {
+      "name": "Room validation and Organization reference consistency",
+      "status": "complete",
+      "validation": [
+        "Required room fields are validated at the API boundary.",
+        "Capacity must be positive; roomClass and status must use supported enum values.",
+        "Room names and codes are case-insensitively unique within an office building, including updates and building moves."
+      ],
+      "organizationValidation": {
+        "baseUrlConfiguration": "ORGANIZATION_SERVICE_URL defaults to http://localhost:8082.",
+        "endpoints": [
+          "GET /api/v1/office-buildings/{id}",
+          "GET /api/v1/floors/{id}"
+        ],
+        "behavior": "Forwards the caller's bearer token; requires active building and floor records and verifies that the floor belongs to the supplied building. Missing, inactive, denied, or unavailable references fail closed."
+      },
+      "migration": "Flyway V2 adds case-insensitive functional unique indexes while preserving the applied V1 migration.",
+      "verification": "Focused Room/Testcontainers and Organization-client tests passed 12 tests with zero failures/errors; Identity/common-web passed 35 tests; clean full backend reactor passed 26 suites/80 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "The approved ERD and requirements specifications were not modified; no ERD change was required."
+    },
+    "S4-05": {
+      "name": "Room facility assignments",
+      "status": "complete",
+      "basePath": "/api/v1/rooms/{roomId}/facilities",
+      "operations": [
+        "GET /api/v1/rooms/{roomId}/facilities",
+        "POST /api/v1/rooms/{roomId}/facilities",
+        "PUT /api/v1/rooms/{roomId}/facilities/{assignmentId}"
+      ],
+      "request": {
+        "facilityTypeId": "UUID, required, must reference an active FacilityType",
+        "quantity": "integer, required, range 1..32767",
+        "state": ["WORKING", "FAULTY", "REMOVED"],
+        "lastServicedAt": "ISO-8601 instant, optional"
+      },
+      "behavior": "Room-scoped assignments return RoomFacilityDto. Missing rooms/types are rejected, inactive facility types cannot be assigned, and duplicate room/facility-type pairs are rejected on create and update. The ERD-aligned database unique constraint remains authoritative.",
+      "verification": "Focused Room/Testcontainers and Organization-client tests passed 13 tests; Identity/common-web passed 35 tests; clean full backend reactor passed 26 suites/81 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "The approved ERD and requirements specifications were not modified; existing ROOM_FACILITY fields and unique room/type relationship fully support this requirement."
+    },
+    "S4-06": {
+      "name": "Room-specific and building-default room rules",
+      "status": "complete",
+      "operations": [
+        "GET /api/v1/rooms/{roomId}/rules",
+        "POST /api/v1/rooms/{roomId}/rules",
+        "GET /api/v1/office-buildings/{officeBuildingId}/room-rules",
+        "POST /api/v1/office-buildings/{officeBuildingId}/room-rules",
+        "GET /api/v1/room-rules/{ruleId}",
+        "PUT /api/v1/room-rules/{ruleId}"
+      ],
+      "requestFields": {
+        "minDurationMinutes": "optional positive integer",
+        "maxDurationMinutes": "optional positive integer; not less than minDurationMinutes when both are supplied",
+        "minAdvanceMinutes": "optional nonnegative integer",
+        "maxAdvanceDays": "optional nonnegative integer; minimum advance must not exceed this bound when both are supplied",
+        "cancellationDeadlineMinutes": "optional nonnegative integer",
+        "recurringAllowed": "required boolean",
+        "externalGuestsAllowed": "required boolean",
+        "approvalRequired": "required boolean",
+        "outsideHoursAllowed": "required boolean",
+        "releaseBufferMinutes": "optional nonnegative integer; defaults to 5",
+        "active": "required boolean",
+        "effectiveFrom": "optional ISO-8601 instant",
+        "allowedDepartmentIds": "required list of at most 100 UUIDs; empty means unrestricted"
+      },
+      "scope": "Room rules have exactly one owner: room-specific rules store room_id and no office_building_id; building defaults store office_building_id and no room_id. Flyway V3 enforces this scope invariant.",
+      "organizationValidation": {
+        "endpoints": [
+          "GET /api/v1/office-buildings/{id}",
+          "GET /api/v1/departments/{id}"
+        ],
+        "behavior": "The caller's bearer token is forwarded. Building defaults require an active building. Allowed departments must be active; a department with a building scope must match the policy scope, while global departments are permitted. Organization failures fail closed; Room Service does not read Organization tables."
+      },
+      "response": "RoomRuleDto includes policy fields, owner scope, and allowedDepartmentIds. Updating a rule replaces its allowed-department set; active=false deactivates without deleting the rule.",
+      "verification": "Focused Room/Testcontainers and Organization-client tests passed 18 tests; Identity/common-web passed 35 tests; clean full backend reactor passed 26 suites/86 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "No ERD or requirements document change was needed; V3 enforces scope semantics already represented by ROOM_RULE.room_id and office_building_id."
+    },
+    "S4-07": {
+      "name": "Room photo lifecycle and Cloudinary integration",
+      "status": "complete",
+      "basePath": "/api/v1/rooms/{roomId}/photos",
+      "operations": [
+        "GET /api/v1/rooms/{roomId}/photos",
+        "POST /api/v1/rooms/{roomId}/photos (multipart/form-data)",
+        "PUT /api/v1/rooms/{roomId}/photos/{photoId}",
+        "DELETE /api/v1/rooms/{roomId}/photos/{photoId}"
+      ],
+      "uploadContract": {
+        "filePart": "file, required",
+        "supportedTypes": ["image/jpeg", "image/png", "image/webp"],
+        "validation": "Content-Type must match JPEG/PNG/WEBP file signatures; empty/unsupported/spoofed files are rejected before provider upload.",
+        "defaultMaxFileSizeBytes": 5242880,
+        "defaultMaxPhotosPerRoom": 10,
+        "optionalMetadata": ["sortOrder", "primary", "approvedForPublic"]
+      },
+      "authorization": {
+        "identityEndpoint": "POST /api/v1/internal/authorization/room-management",
+        "permission": "ROOM_MANAGE",
+        "scope": "Authenticated active user must have ROOM_MANAGE at the room's office-building scope or global system-admin permission; Room Service forwards the caller's bearer token and fails closed on denial or Identity outage."
+      },
+      "providerBoundary": {
+        "adapter": "CloudinaryPhotoStorage",
+        "operations": ["upload", "delete"],
+        "configuration": ["CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET", "CLOUDINARY_FOLDER"],
+        "storedFields": ["cloudinaryPublicId", "secureUrl", "sortOrder", "primary", "approvedForPublic", "createdAt"],
+        "binaryStorage": "Image bytes are streamed from the multipart request to the provider and are never persisted in the Room database or filesystem.",
+        "metadataSource": "Provider response supplies public ID and HTTPS secure URL; clients cannot submit trusted asset IDs or URLs."
+      },
+      "verification": "Focused Room/Cloudinary/authorization/Organization tests passed 26 tests; Identity/common-web passed 35 tests; clean full backend reactor passed 28 suites/94 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "Existing ROOM_PHOTO fields fully support the feature; no ERD or requirements document change was needed."
+    },
+    "S4-08": {
+      "name": "Room status lifecycle, soft deletion, and maintenance periods",
+      "status": "complete",
+      "statusOperations": [
+        "PATCH /api/v1/rooms/{id}/status",
+        "GET /api/v1/rooms/{id}/status-history",
+        "DELETE /api/v1/rooms/{id}"
+      ],
+      "statusBehavior": "Status and room_status_history are persisted atomically. No-op transitions are rejected; DECOMMISSIONED is terminal; general room PUT cannot change status. History stores old/new status, changedByUserId, reason, and generated changedAt.",
+      "softDeletion": "Room deletion sets deleted_at. Deleted rooms are hidden from normal room reads/lists and mutations, while the room row, status history, and room-owned child rows remain stored; status history remains queryable for deleted rooms.",
+      "maintenanceOperations": [
+        "GET /api/v1/rooms/{roomId}/maintenance-periods",
+        "POST /api/v1/rooms/{roomId}/maintenance-periods",
+        "DELETE /api/v1/rooms/{roomId}/maintenance-periods/{maintenancePeriodId}"
+      ],
+      "maintenanceBehavior": "Requests use finite half-open [startsAt, endsAt) ranges and reject end times that are not after start times. PostgreSQL btree_gist exclusion prevents overlap for one room; adjacent periods and overlap across different rooms are allowed. Overlap returns 409 ROOM_MAINTENANCE_PERIOD_OVERLAP.",
+      "actorAttribution": "S4-09 removes changedByUserId and createdByUserId from Room request DTOs. Identity returns actorUserId from the authenticated principal after authorizing the operation.",
+      "verification": "The original S4-08 focused Room/Testcontainers gate passed 19 tests. The final Room/Testcontainers suite passed 22 tests; with four Identity-client tests, the focused Room/client suites passed 26 tests. Identity/common-web passed 41 tests; full backend reactor passed 28 suites/101 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "Existing ROOM_STATUS_HISTORY and MAINTENANCE_PERIOD schema, including the PostgreSQL exclusion constraint, support S4-08. No ERD, requirements, or migration change was needed."
+    },
+    "S4-09": {
+      "name": "Room mutation authorization and trusted actor derivation",
+      "status": "complete",
+      "identityEndpoint": "POST /api/v1/internal/authorization/room-management",
+      "authorization": "All Room writes forward the caller's bearer token. Building-scoped writes require an active Identity account with ROOM_MANAGE for each affected building; room moves authorize both old and destination buildings. Scope-less room/facility catalog writes require global IDENTITY_SYSTEM_ADMIN.",
+      "actorAttribution": "Identity returns actorUserId from the authenticated JWT subject after policy evaluation. Room status-history and maintenance records use that response; Room DTOs accept no trusted actor, role, or scope values.",
+      "failClosedBehavior": "401 for missing/invalid authentication, 403 for policy denial, 503 for Identity outage or invalid/missing actor response. Identity authorization runs before Room persistence and before Organization reference lookups.",
+      "protectedWrites": [
+        "POST /api/v1/rooms",
+        "PUT /api/v1/rooms/{id}",
+        "PATCH/DELETE /api/v1/rooms/{id}",
+        "POST /api/v1/room-types; PUT /api/v1/room-types/{id}",
+        "POST /api/v1/facility-types; PUT /api/v1/facility-types/{id}",
+        "POST /api/v1/rooms/{roomId}/facilities; PUT /api/v1/rooms/{roomId}/facilities/{assignmentId}",
+        "POST /api/v1/rooms/{roomId}/rules; POST /api/v1/office-buildings/{officeBuildingId}/room-rules; PUT /api/v1/room-rules/{ruleId}",
+        "POST/PUT/DELETE /api/v1/rooms/{roomId}/photos",
+        "PATCH /api/v1/rooms/{id}/status",
+        "POST/DELETE /api/v1/rooms/{roomId}/maintenance-periods"
+      ],
+      "verification": "Focused Room/Testcontainers and Identity-client suites passed 26 tests; Identity/common-web passed 41 tests; full backend reactor passed 28 suites/101 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "No ERD, requirements, or migration change was needed."
+    },
+    "S4-10": {
+      "name": "Room API response, error, validation, correlation, and OpenAPI contract",
+      "status": "complete",
+      "openApi": "/v3/api-docs",
+      "documentedOperationCount": 31,
+      "security": "All /api/v1 operations declare the Identity bearerAuth JWT scheme.",
+      "successContract": "Room operations return service-owned DTOs inside shared ApiResponse<T>; OpenAPI documents the common success envelope.",
+      "errorContract": "GlobalExceptionHandler returns shared ApiError for Bean Validation, malformed requests, DomainException business errors, access denials, and unexpected failures. OpenAPI documents ApiError schemas for 400, 401, 403, 404, 409, 500, 502, and 503 responses with stable Room error codes.",
+      "correlationId": "X-Correlation-ID is documented as an optional request header and echoed in success and error responses; invalid or absent values are generated by common-web.",
+      "validation": "All JSON request DTOs and query records are validated at controller boundaries; Room API validation errors return VALIDATION_ERROR with field details.",
+      "verification": "RoomServiceApplicationTests passed 24 PostgreSQL Testcontainers tests, including all 31 operation paths, bearer scheme, response/error schemas, correlation metadata, validation and stable conflict codes. Identity/common-web passed 41 tests; full backend reactor passed 28 suites/103 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "No ERD, requirements, or migration change was needed. S4-11 verification is recorded in the following progress entry."
+    },
+    "S4-11": {
+      "name": "Room migration, repository, service, API, authorization, integrity, and error verification",
+      "status": "complete",
+      "postgresqlVerification": "RoomServiceApplicationTests passed 27 Testcontainers tests against PostgreSQL 16, covering Flyway V1-V3, PostgreSQL constraints and foreign-key ownership, persistence mappings, API/service behavior, authorization, uniqueness/capacity, soft deletion, room rules, facility assignments, photo lifecycle, status history, maintenance ranges, and shared error/correlation responses.",
+      "providerVerification": "CloudinaryPhotoStorageAdapterTests cover successful upload/delete, missing configuration, malformed upload metadata, provider upload/delete failures, and safe dependency errors. Room API tests verify 502 invalid-metadata and 503 provider-failure responses with correlation IDs and compensate provider assets when metadata validation or Room persistence fails.",
+      "focusedVerification": "RoomServiceApplicationTests, CloudinaryPhotoStorageAdapterTests, HttpRoomPhotoAuthorizationClientTests, and HttpOrganizationDirectoryClientTests passed 39 tests with zero failures/errors/skips.",
+      "crossStageVerification": "Identity/common-web passed 41 tests. The full Maven reactor passed 28 suites and 107 tests with zero failures/errors/skips.",
+      "requirementsAndErd": "No requirements, ERD, or migration change was needed. S4-12 documentation and verification is complete; Stage 4 awaits explicit user acceptance."
+    },
+    "S4-12": {
+      "name": "Room documentation and verification synchronization",
+      "status": "complete",
+      "scope": "Synchronize Room service documentation, SRS/ERD alignment, environment/configuration notes, API contract and Postman examples, changelog, focused Room tests, Identity regression, and full-reactor verification before Stage 4 acceptance.",
+      "documentationAndConfiguration": "Room README, backend roadmap, shared architecture/docs summaries, Identity/Organization alignment notes, API-contract README, and changelog record S4-12. ROOM_SERVICE_PORT defaults to 8083 in the shared environment example; Room integration, database, Cloudinary, and upload-limit settings are documented.",
+      "roomPostman": "rra-roomiq-room-postman-collection.json covers all 31 documented Room operations with bearer auth, correlation headers, representative bodies, and resource variables. validate-room-postman-collection.mjs checks route inventory, auth, correlation, multipart upload, required variables, and secret markers.",
+      "verification": "Focused Room/Testcontainers and adapter/client suites passed 39 tests; Identity/common-web passed 41 tests; full reactor passed 28 suites and 107 tests; both Identity and Room Postman validators passed.",
+      "requirementsAndErd": "No SRS, requirements, or ERD change was needed. Stage 4 was explicitly accepted by the user before Stage 5 began."
+    }
+  },
+  "stage5Progress": {
+    "S5-01": {
+      "name": "Scheduling-owned schema and persistence model",
+      "status": "complete",
+      "migrations": ["scheduling-service/src/main/resources/db/migration/V1__scheduling_schema.sql", "scheduling-service/src/main/resources/db/migration/V2__one_calendar_per_building.sql"],
+      "tables": ["working_calendar", "working_day_window", "holiday", "closure_period", "recurrence_rule"],
+      "ownership": "Scheduling owns these five entities. Building and creator/user references are UUID scalars. Room retains maintenance periods; Booking owns reservations and the final occupancy conflict barrier in S6.",
+      "integrity": "Flyway V1-V2 and Hibernate schema validation match the approved ERD. V2's partial unique index allows at most one calendar per non-null office_building_id while retaining multiple null-scoped calendars. PostgreSQL checks cover weekdays, working-window order, nonempty closure ranges, recurrence end dates, and positive occurrence counts. PostgreSQL tstzrange is mapped by a Scheduling-local Hibernate UserType.",
+      "verification": "Scheduling Testcontainers persistence tests and the complete backend Java test gate passed without reported failures or errors.",
+      "requirementsAndErd": "No requirements or ERD change was needed."
+    },
+    "S5-02": {
+      "name": "Calendar and working-window APIs",
+      "status": "complete",
+      "basePath": "/api/v1/working-calendars",
+      "operations": [
+        "GET /api/v1/working-calendars",
+        "POST /api/v1/working-calendars",
+        "GET /api/v1/working-calendars/{calendarId}",
+        "PUT /api/v1/working-calendars/{calendarId}",
+        "DELETE /api/v1/working-calendars/{calendarId}",
+        "GET /api/v1/working-calendars/{calendarId}/working-day-windows",
+        "POST /api/v1/working-calendars/{calendarId}/working-day-windows",
+        "PUT /api/v1/working-calendars/{calendarId}/working-day-windows/{windowId}",
+        "DELETE /api/v1/working-calendars/{calendarId}/working-day-windows/{windowId}"
+      ],
+      "validation": "Calendar timezone must be a valid IANA ZoneId. Calendar list paging defaults to page 0/size 20 and caps size at 100; name sorting is allow-listed. Working-day weekday values are 1-7 and closeTime must be later than openTime. Calendar deletion conflicts while windows or calendar-scoped holidays reference it.",
+      "authorization": "Every /api/v1 request forwards the caller bearer token to POST /api/v1/internal/authorization/scheduling. Active users may READ; MANAGE requires current IDENTITY_SYSTEM_ADMIN. Missing credentials, denial, and Identity outages fail closed.",
+      "apiContract": "Nine operations use Scheduling-owned DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID propagation, and bearer-protected OpenAPI documentation.",
+      "verification": "Focused Scheduling/PostgreSQL API and migration tests, Identity authorization/OpenAPI tests, and the full backend Java test gate passed with no reported failures or errors.",
+      "requirementsAndErd": "No requirements or ERD change was needed."
+    },
+    "S5-03": {
+      "name": "Holiday and closure management APIs",
+      "status": "planned"
+    },
+    "S5-04": {
+      "name": "Recurrence persistence and validation",
+      "status": "planned"
+    },
+    "S5-05": {
+      "name": "Scheduling constraint validation API",
+      "status": "planned"
+    },
+    "S5-06": {
+      "name": "Availability calculation and owner-service integration",
+      "status": "planned"
+    },
+    "S5-07": {
+      "name": "Stage 5 regression and documentation gate",
+      "status": "planned"
+    }
+  },
+  "authorizationPolicyDocumentation": "identity-service/AUTHORIZATION.md",
+  "authorization": {
+    "protectedApiPrefix": "/api/v1",
+    "publicRoutes": [
+      "POST /api/v1/auth/login",
+      "POST /api/v1/auth/refresh",
+      "POST /api/v1/auth/logout",
+      "GET /v3/api-docs/**",
+      "GET /swagger-ui/**",
+      "GET /swagger-ui.html",
+      "GET /actuator/health"
+    ],
+    "accessDenied": {
+      "httpStatus": 403,
+      "errorCode": "ACCESS_DENIED",
+      "response": "Shared ApiError envelope with correlation ID"
+    },
+    "userScope": "Scoped Admin user listing is filtered to eligible in-building Secretaries and unassigned pending users; single-user operations use the same policy checks.",
+    "organizationPolicy": "POST /api/v1/internal/authorization/organization evaluates READ or MANAGE against the authenticated active Identity account and current system-admin permission.",
+    "schedulingPolicy": "POST /api/v1/internal/authorization/scheduling allows READ for active Identity accounts and requires IDENTITY_SYSTEM_ADMIN for MANAGE.",
+    "roomManagementPolicy": "POST /api/v1/internal/authorization/room-management evaluates ROOM_MANAGE for a building scope or global system-admin authority for a null scope, then returns actorUserId from the authenticated principal.",
+    "privilegeGrantor": "The authenticated actor is persisted as grantor; a client-supplied grantedByUserId is ignored.",
+    "bootstrap": "No public Super Admin bootstrap endpoint exists."
+  },
+  "sharedStandardsModule": "common-web",
+  "baseUrl": "http://localhost:8081",
+  "documentation": {
+    "openapiUi": "/swagger-ui/index.html",
+    "openapiJson": "/v3/api-docs",
+    "health": "/actuator/health",
+    "postmanCollection": "api-contracts/rra-roomiq-identity-postman-collection.json",
+    "roomPostmanCollection": "api-contracts/rra-roomiq-room-postman-collection.json",
+    "roomPostmanValidator": "api-contracts/validate-room-postman-collection.mjs",
+    "schedulingServiceReadme": "scheduling-service/README.md",
+    "schedulingMigrationV1": "scheduling-service/src/main/resources/db/migration/V1__scheduling_schema.sql",
+    "schedulingMigrationV2": "scheduling-service/src/main/resources/db/migration/V2__one_calendar_per_building.sql"
+  },
+  "commonResponseConvention": {
+    "success": true,
+    "message": "string",
+    "data": "object|null",
+    "metadata": "object",
+    "timestamp": "ISO-8601"
+  },
+  "errorResponseConvention": {
+    "code": "string",
+    "message": "string",
+    "path": "string",
+    "status": 400,
+    "correlationId": "string",
+    "validationErrors": [
+      {
+        "field": "email",
+        "message": "must be a valid email address"
+      }
+    ],
+    "timestamp": "ISO-8601"
+  },
+  "endpoints": [
+    {
+      "name": "Health check",
+      "method": "GET",
+      "path": "/actuator/health",
+      "description": "Application health endpoint",
+      "responseExample": {
+        "status": "UP"
+      }
+    },
+    {
+      "name": "OpenAPI json",
+      "method": "GET",
+      "path": "/v3/api-docs",
+      "description": "OpenAPI contract export",
+      "responseExample": {
+        "openapi": "3.1.0"
+      }
+    },
+    {
+      "name": "Swagger UI",
+      "method": "GET",
+      "path": "/swagger-ui/index.html",
+      "description": "Interactive API documentation",
+      "responseExample": {
+        "html": true
+      }
+    },
+    {
+      "name": "Create user",
+      "method": "POST",
+      "path": "/api/v1/users",
+      "description": "Create a pending user account",
+      "responseExample": {
+        "success": true,
+        "data": {
+          "email": "new.user@rra.rw",
+          "status": "PENDING"
+        }
+      }
+    },
+    {
+      "name": "List users",
+      "method": "GET",
+      "path": "/api/v1/users",
+      "description": "Search and page users; results are server-filtered by the caller's current role, permission, and building scope",
+      "responseExample": {
+        "success": true,
+        "data": {
+          "users": [],
+          "page": 0,
+          "size": 20,
+          "totalElements": 0,
+          "totalPages": 0
+        }
+      }
+    },
+    {
+      "name": "Read user",
+      "method": "GET",
+      "path": "/api/v1/users/{id}",
+      "description": "Read one active, non-deleted user",
+      "responseExample": {
+        "success": true,
+        "data": {
+          "id": "b59e8d0a-7d5a-4d5a-9c4c-1cc9a7f43b7c",
+          "email": "secretary@rra.rw"
+        }
+      }
+    },
+    {
+      "name": "Update user profile",
+      "method": "PATCH",
+      "path": "/api/v1/users/{id}",
+      "description": "Partially update user profile fields",
+      "responseExample": {
+        "success": true
+      }
+    },
+    {
+      "name": "Change user status",
+      "method": "PATCH",
+      "path": "/api/v1/users/{id}/status",
+      "description": "Change user lifecycle status",
+      "responseExample": {
+        "success": true
+      }
+    },
+    {
+      "name": "Soft delete user",
+      "method": "DELETE",
+      "path": "/api/v1/users/{id}",
+      "description": "Disable and soft-delete a user while preserving identity history",
+      "responseExample": {
+        "success": true,
+        "data": null
+      }
+    },
+    {
+      "name": "Create role",
+      "method": "POST",
+      "path": "/api/v1/roles",
+      "description": "Create a dynamic role definition",
+      "responseExample": {
+        "success": true,
+        "data": {
+          "code": "ROOM_ADMIN",
+          "name": "Room administrator"
+        }
+      }
+    },
+    {
+      "name": "Create permission",
+      "method": "POST",
+      "path": "/api/v1/permissions",
+      "description": "Create a dynamic permission definition",
+      "responseExample": {
+        "success": true,
+        "data": {
+          "code": "ROOM.READ",
+          "name": "Read rooms"
+        }
+      }
+    },
+    {
+      "name": "Grant role permission",
+      "method": "POST",
+      "path": "/api/v1/roles/{roleId}/permissions/{permissionId}",
+      "description": "Assign a permission to a role; duplicate pairs conflict",
+      "responseExample": {
+        "success": true
+      }
+    },
+    {
+      "name": "Assign scoped user role",
+      "method": "POST",
+      "path": "/api/v1/users/{userId}/roles",
+      "description": "Assign a role optionally scoped to an office building",
+      "responseExample": {
+        "success": true
+      }
+    },
+    {
+      "name": "Grant user privilege",
+      "method": "POST",
+      "path": "/api/v1/users/{userId}/privileges",
+      "description": "Grant a privilege with optional validity bounds",
+      "responseExample": {
+        "success": true,
+        "data": {
+          "privilegeCode": "CG_BOOKING",
+          "active": true,
+          "effectiveNow": false
+        }
+      }
+    },
+    {
+      "name": "Evaluate user privilege",
+      "method": "GET",
+      "path": "/api/v1/users/{userId}/privileges/evaluate",
+      "description": "Evaluate active account and privilege validity at the requested instant",
+      "responseExample": {
+        "success": true,
+        "data": true
+      }
+    },
+    {
+      "name": "Revoke user privilege",
+      "method": "DELETE",
+      "path": "/api/v1/users/{userId}/privileges/{privilegeId}",
+      "description": "Deactivate a privilege while preserving grant history",
+      "responseExample": {
+        "success": true,
+        "data": null
+      }
+    },
+    {
+      "name": "Login",
+      "method": "POST",
+      "path": "/api/v1/auth/login",
+      "description": "Verify active account credentials and issue an access/refresh token pair",
+      "responseExample": {
+        "success": true,
+        "data": {
+          "tokenType": "Bearer",
+          "expiresIn": 900,
+          "accessToken": "<returned-at-runtime>",
+          "refreshToken": "<returned-at-runtime>"
+        }
+      }
+    },
+    {
+      "name": "Refresh tokens",
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "description": "Rotate refresh token and issue a new access token",
+      "responseExample": {
+        "success": true
+      }
+    },
+    {
+      "name": "Logout",
+      "method": "POST",
+      "path": "/api/v1/auth/logout",
+      "description": "Revoke the refresh session and invalidate its access token",
+      "responseExample": {
+        "success": true,
+        "data": null
+      }
+    }
+  ],
+  "sampleRequests": [
+    {
+      "name": "health-check",
+      "method": "GET",
+      "url": "http://localhost:8081/actuator/health",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "openapi-docs",
+      "method": "GET",
+      "url": "http://localhost:8081/v3/api-docs",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "create-user",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/users",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Correlation-ID": "postman-user-create"
+      },
+      "body": {
+        "email": "new.user@rra.rw",
+        "fullName": "New RRA User",
+        "password": "Change-this-password-9"
+      }
+    },
+    {
+      "name": "list-users",
+      "method": "GET",
+      "url": "http://localhost:8081/api/v1/users?page=0&size=20&status=PENDING",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "read-user",
+      "method": "GET",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "update-user",
+      "method": "PATCH",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "displayName": "Updated Display Name"
+      }
+    },
+    {
+      "name": "change-user-status",
+      "method": "PATCH",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}/status",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "status": "ACTIVE",
+        "reason": "Account verified"
+      }
+    },
+    {
+      "name": "soft-delete-user",
+      "method": "DELETE",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "create-role",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/roles",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "code": "ROOM_ADMIN",
+        "name": "Room administrator",
+        "description": "Manage rooms within assigned scope",
+        "system": false
+      }
+    },
+    {
+      "name": "create-permission",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/permissions",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "code": "ROOM.READ",
+        "name": "Read rooms",
+        "domain": "ROOM"
+      }
+    },
+    {
+      "name": "grant-role-permission",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/roles/{{roleId}}/permissions/{{permissionId}}",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "assign-user-role",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}/roles",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "roleId": "{{roleId}}",
+        "scopeOfficeBuildingId": "3d9c6ff7-9416-4d04-a31d-bba6d66d88ea"
+      }
+    },
+    {
+      "name": "grant-cg-booking-privilege",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}/privileges",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "privilegeCode": "CG_BOOKING",
+        "grantedByUserId": "{{adminUserId}}",
+        "validFrom": "2026-10-01T00:00:00Z",
+        "validTo": "2027-10-01T00:00:00Z"
+      }
+    },
+    {
+      "name": "evaluate-cg-booking-privilege",
+      "method": "GET",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}/privileges/evaluate?privilegeCode=CG_BOOKING&at=2026-10-10T09:00:00Z",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "list-user-privileges",
+      "method": "GET",
+      "url": "http://localhost:8081/api/v1/users/{{userId}}/privileges",
+      "headers": {},
+      "body": null
+    },
+    {
+      "name": "login",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/auth/login",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "email": "{{activeUserEmail}}",
+        "password": "{{activeUserPassword}}"
+      }
+    },
+    {
+      "name": "refresh-token",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/auth/refresh",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "refreshToken": "{{refreshToken}}"
+      }
+    },
+    {
+      "name": "logout",
+      "method": "POST",
+      "url": "http://localhost:8081/api/v1/auth/logout",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "refreshToken": "{{refreshToken}}"
+      }
+    }
+  ],
+  "sampleData": {
+    "user": {
+      "id": "b59e8d0a-7d5a-4d5a-9c4c-1cc9a7f43b7c",
+      "email": "secretary@rra.rw",
+      "fullName": "Marie Uwimana",
+      "role": "SECRETARY",
+      "departmentId": "7c2b1f0e-0d0d-4c60-b0de-7fae9d73e7a1",
+      "officeBuildingId": "3d9c6ff7-9416-4d04-a31d-bba6d66d88ea",
+      "status": "ACTIVE"
+    },
+    "room": {
+      "id": "b0d2b3fb-5a44-42f7-8dd8-6d2f73d5c2a5",
+      "name": "Board Room A",
+      "code": "BR-A",
+      "capacity": 12,
+      "class": "VIP",
+      "status": "AVAILABLE",
+      "floorId": "9c92a738-4328-4b2c-9b8a-6d5593d8fb52",
+      "officeBuildingId": "3d9c6ff7-9416-4d04-a31d-bba6d66d88ea"
+    },
+    "bookingRequest": {
+      "title": "Quarterly Budget Review",
+      "purpose": "Review 2026 budget allocation",
+      "requestedStart": "2026-10-10T09:00:00Z",
+      "requestedEnd": "2026-10-10T10:00:00Z",
+      "attendeeCount": 8,
+      "departmentId": "7c2b1f0e-0d0d-4c60-b0de-7fae9d73e7a1",
+      "roomId": "b0d2b3fb-5a44-42f7-8dd8-6d2f73d5c2a5",
+      "externalGuests": false
+    }
+  },
+  "notes": [
+    "This JSON is the Postman import contract for the current backend foundation and verified identity-service progress through S2-16.",
+    "All services consume common-web for the shared response, error, validation, correlation, logging, and OpenAPI conventions.",
+    "The API contract is intentionally synchronized with the foundation docs and the backend implementation state.",
+    "Identity user, role, permission, privilege, authentication, stable error, correlation, audit-outbox, migration, authorization, automated test coverage, Postman collection imports, and safe sample payloads are documented through S2-16; use only approved active test accounts and local secret variables in Postman."
+  ]
+}

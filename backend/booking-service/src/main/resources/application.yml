@@ -1,0 +1,16 @@
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: booking-service
+server:
+  port: ${BOOKING_SERVICE_PORT:8085}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+logging:
+  level:
+    root: INFO
+    rw.rra.roomiq: INFO

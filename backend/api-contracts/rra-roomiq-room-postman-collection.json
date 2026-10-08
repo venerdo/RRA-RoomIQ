@@ -1,0 +1,97 @@
+{
+  "info": {
+    "name": "RRA RoomIQ Room API",
+    "description": "Room Service examples for all 31 documented /api/v1 operations. Set accessToken to an Identity JWT with ROOM_MANAGE for the selected building. Room type and facility type mutations require IDENTITY_SYSTEM_ADMIN. Set officeBuildingId, floorId, and departmentId to active Organization records. For photo upload, select a JPEG, PNG, or WEBP file no larger than the configured limit.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{accessToken}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8083" },
+    { "key": "accessToken", "value": "" },
+    { "key": "correlationId", "value": "roomiq-postman-s4-12" },
+    { "key": "officeBuildingId", "value": "replace-with-active-building-uuid" },
+    { "key": "floorId", "value": "replace-with-active-floor-uuid" },
+    { "key": "departmentId", "value": "replace-with-active-department-uuid" },
+    { "key": "roomTypeId", "value": "set-by-create-room-type" },
+    { "key": "facilityTypeId", "value": "set-by-create-facility-type" },
+    { "key": "roomId", "value": "set-by-create-room" },
+    { "key": "facilityAssignmentId", "value": "set-by-create-room-facility" },
+    { "key": "roomRuleId", "value": "set-by-create-room-rule" },
+    { "key": "buildingRuleId", "value": "set-by-create-building-rule" },
+    { "key": "photoId", "value": "set-by-upload-photo" },
+    { "key": "maintenancePeriodId", "value": "set-by-create-maintenance-period" }
+  ],
+  "item": [
+    {
+      "name": "Room types",
+      "item": [
+        { "name": "List room types", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/room-types?page=0&size=20" } },
+        { "name": "Create room type", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"code\":\"POSTMAN-ROOM-{{$guid}}\",\"name\":\"Postman boardroom\",\"active\":true}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/room-types" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('roomTypeId', pm.response.json().data.id);"] } }] },
+        { "name": "Get room type", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/room-types/{{roomTypeId}}" } },
+        { "name": "Update room type", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"code\":\"POSTMAN-ROOM-UPDATED-{{$guid}}\",\"name\":\"Postman boardroom updated\",\"active\":true}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/room-types/{{roomTypeId}}" } }
+      ]
+    },
+    {
+      "name": "Facility types",
+      "item": [
+        { "name": "List facility types", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/facility-types?page=0&size=20" } },
+        { "name": "Create facility type", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"code\":\"POSTMAN-FAC-{{$guid}}\",\"name\":\"Projector\",\"category\":\"AV\",\"active\":true}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/facility-types" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('facilityTypeId', pm.response.json().data.id);"] } }] },
+        { "name": "Get facility type", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/facility-types/{{facilityTypeId}}" } },
+        { "name": "Update facility type", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"code\":\"POSTMAN-FAC-UPDATED-{{$guid}}\",\"name\":\"Projector updated\",\"category\":\"AV\",\"active\":true}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/facility-types/{{facilityTypeId}}" } }
+      ]
+    },
+    {
+      "name": "Rooms",
+      "item": [
+        { "name": "List rooms", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms?page=0&size=20&sortBy=code&sortDirection=ASC" } },
+        { "name": "Create room", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"floorId\":\"{{floorId}}\",\"officeBuildingId\":\"{{officeBuildingId}}\",\"roomTypeId\":\"{{roomTypeId}}\",\"name\":\"Postman room {{$guid}}\",\"code\":\"PM-{{$guid}}\",\"description\":\"Room created from the Room API collection\",\"capacity\":8,\"roomClass\":\"NORMAL\",\"status\":\"AVAILABLE\"}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('roomId', pm.response.json().data.id);"] } }] },
+        { "name": "Get room", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}" } },
+        { "name": "Update room", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"floorId\":\"{{floorId}}\",\"officeBuildingId\":\"{{officeBuildingId}}\",\"roomTypeId\":\"{{roomTypeId}}\",\"name\":\"Postman room updated {{$guid}}\",\"code\":\"PM-UPD-{{$guid}}\",\"description\":\"Updated from the Room API collection\",\"capacity\":10,\"roomClass\":\"NORMAL\",\"status\":\"AVAILABLE\"}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}" } },
+        { "name": "Change room status", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"status\":\"MAINTENANCE\",\"reason\":\"Postman lifecycle example\"}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/status" } },
+        { "name": "List room status history", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/status-history" } },
+        { "name": "Soft-delete room", "request": { "method": "DELETE", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}" } }
+      ]
+    },
+    {
+      "name": "Room facilities",
+      "item": [
+        { "name": "List room facilities", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/facilities" } },
+        { "name": "Assign facility to room", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"facilityTypeId\":\"{{facilityTypeId}}\",\"quantity\":1,\"state\":\"WORKING\",\"lastServicedAt\":\"2026-10-07T09:00:00Z\"}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/facilities" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('facilityAssignmentId', pm.response.json().data.id);"] } }] },
+        { "name": "Update room facility", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"facilityTypeId\":\"{{facilityTypeId}}\",\"quantity\":2,\"state\":\"WORKING\",\"lastServicedAt\":\"2026-10-07T09:00:00Z\"}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/facilities/{{facilityAssignmentId}}" } }
+      ]
+    },
+    {
+      "name": "Room rules",
+      "item": [
+        { "name": "List room rules", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/rules" } },
+        { "name": "Create room rule", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"minDurationMinutes\":15,\"maxDurationMinutes\":120,\"minAdvanceMinutes\":0,\"maxAdvanceDays\":30,\"cancellationDeadlineMinutes\":15,\"recurringAllowed\":true,\"externalGuestsAllowed\":false,\"approvalRequired\":true,\"outsideHoursAllowed\":false,\"releaseBufferMinutes\":5,\"active\":true,\"allowedDepartmentIds\":[]}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/rules" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('roomRuleId', pm.response.json().data.id);"] } }] },
+        { "name": "List building default rules", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/office-buildings/{{officeBuildingId}}/room-rules" } },
+        { "name": "Create building default rule", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"minDurationMinutes\":15,\"maxDurationMinutes\":120,\"minAdvanceMinutes\":0,\"maxAdvanceDays\":30,\"cancellationDeadlineMinutes\":15,\"recurringAllowed\":true,\"externalGuestsAllowed\":false,\"approvalRequired\":true,\"outsideHoursAllowed\":false,\"releaseBufferMinutes\":5,\"active\":true,\"allowedDepartmentIds\":[]}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/office-buildings/{{officeBuildingId}}/room-rules" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('buildingRuleId', pm.response.json().data.id);"] } }] },
+        { "name": "Get room rule", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/room-rules/{{roomRuleId}}" } },
+        { "name": "Update room rule", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"minDurationMinutes\":15,\"maxDurationMinutes\":90,\"minAdvanceMinutes\":0,\"maxAdvanceDays\":30,\"cancellationDeadlineMinutes\":10,\"recurringAllowed\":false,\"externalGuestsAllowed\":false,\"approvalRequired\":true,\"outsideHoursAllowed\":false,\"releaseBufferMinutes\":5,\"active\":true,\"allowedDepartmentIds\":[]}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/room-rules/{{roomRuleId}}" } }
+      ]
+    },
+    {
+      "name": "Room photos",
+      "item": [
+        { "name": "List room photos", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/photos" } },
+        { "name": "Upload room photo", "request": { "method": "POST", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "formdata", "formdata": [{ "key": "file", "type": "file", "src": "" }, { "key": "sortOrder", "value": "0", "type": "text" }, { "key": "primary", "value": "false", "type": "text" }, { "key": "approvedForPublic", "value": "false", "type": "text" }] }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/photos" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('photoId', pm.response.json().data.id);"] } }] },
+        { "name": "Update room photo metadata", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"sortOrder\":1,\"primary\":false,\"approvedForPublic\":false}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/photos/{{photoId}}" } },
+        { "name": "Delete room photo", "request": { "method": "DELETE", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/photos/{{photoId}}" } }
+      ]
+    },
+    {
+      "name": "Maintenance periods",
+      "item": [
+        { "name": "List room maintenance periods", "request": { "method": "GET", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/maintenance-periods" } },
+        { "name": "Create maintenance period", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "body": { "mode": "raw", "raw": "{\"startsAt\":\"2026-10-10T09:00:00Z\",\"endsAt\":\"2026-10-10T10:00:00Z\",\"reason\":\"Preventive maintenance\"}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/maintenance-periods" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('maintenancePeriodId', pm.response.json().data.id);"] } }] },
+        { "name": "Delete maintenance period", "request": { "method": "DELETE", "header": [{ "key": "X-Correlation-ID", "value": "{{correlationId}}" }], "url": "{{baseUrl}}/api/v1/rooms/{{roomId}}/maintenance-periods/{{maintenancePeriodId}}" } }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+roomiq:
+  audit:
+    relay:
+      enabled: false
+
+management:
+  health:
+    rabbit:
+      enabled: false

@@ -1,0 +1,533 @@
+erDiagram
+%% RRA RoomIQ - Entity Relationship Diagram (logical, PostgreSQL)
+%% Cross-service references are IDs only (no physical FK across service schemas)
+
+  COUNTRY {
+    uuid id PK
+    varchar name "required, unique"
+    char iso_code "unique"
+    boolean is_active "required"
+    timestamptz created_at "required"
+    timestamptz updated_at
+  }
+
+  PROVINCE {
+    uuid id PK
+    uuid country_id FK "required"
+    varchar name "required, unique per country"
+    boolean is_active "required"
+    timestamptz created_at "required"
+  }
+
+  DISTRICT {
+    uuid id PK
+    uuid province_id FK "required"
+    varchar name "required, unique per province"
+    boolean is_active "required"
+    timestamptz created_at "required"
+  }
+
+  OFFICE_BUILDING {
+    uuid id PK
+    uuid district_id FK "required"
+    varchar name "required"
+    varchar code "required, unique"
+    text address
+    varchar timezone "required, default Africa/Kigali"
+    uuid working_calendar_id FK "optional"
+    boolean is_active "required"
+    timestamptz created_at "required"
+  }
+
+  FLOOR {
+    uuid id PK
+    uuid office_building_id FK "required"
+    varchar name "required, unique per building"
+    smallint level "required"
+    boolean is_active "required"
+    timestamptz created_at "required"
+  }
+
+  DEPARTMENT {
+    uuid id PK
+    uuid office_building_id FK "optional scope"
+    uuid parent_department_id FK "optional self ref"
+    varchar name "required"
+    varchar code "required, unique"
+    department_status status "enum ACTIVE INACTIVE"
+    timestamptz created_at "required"
+  }
+
+  APP_USER {
+    uuid id PK
+    varchar email "required, unique"
+    varchar national_id "optional, unique"
+    varchar phone "optional, unique"
+    varchar password_hash "optional, local credentials"
+    varchar full_name "required"
+    varchar display_name "optional"
+    uuid department_id FK "optional, required for Secretary"
+    uuid office_building_id FK "optional scope"
+    user_status status "enum ACTIVE PENDING SUSPENDED DISABLED"
+    timestamptz last_login_at
+    int version "optimistic lock"
+    timestamptz created_at "required"
+    timestamptz deleted_at "soft delete"
+  }
+
+  ROLE {
+    uuid id PK
+    varchar code "required, unique: SUPER_ADMIN ADMIN SECRETARY"
+    varchar name "required"
+    text description
+    boolean is_system "required"
+  }
+
+  PERMISSION {
+    uuid id PK
+    varchar code "required, unique"
+    varchar name "required"
+    varchar domain "optional grouping"
+  }
+
+  ROLE_PERMISSION {
+    uuid id PK
+    uuid role_id FK "required"
+    uuid permission_id FK "required"
+  }
+
+  USER_ROLE {
+    uuid id PK
+    uuid user_id FK "required"
+    uuid role_id FK "required"
+    uuid scope_office_building_id FK "optional scope"
+    uuid granted_by_user_id FK "optional"
+    timestamptz granted_at "required"
+  }
+
+  USER_PRIVILEGE {
+    uuid id PK
+    uuid user_id FK "required"
+    varchar privilege_code "required e.g. CG_BOOKING"
+    uuid granted_by_user_id FK "optional"
+    timestamptz valid_from
+    timestamptz valid_to
+    boolean is_active "required"
+  }
+
+  USER_SESSION {
+    uuid id PK
+    uuid user_id FK "required"
+    varchar refresh_token_hash "required, unique"
+    varchar ip_address
+    text user_agent
+    timestamptz issued_at "required"
+    timestamptz expires_at "required"
+    timestamptz revoked_at
+  }
+
+  ROOM {
+    uuid id PK
+    uuid floor_id FK "required"
+    uuid office_building_id FK "required, denormalized scope"
+    uuid room_type_id FK "required"
+    varchar name "required, unique per building"
+    varchar code "required, unique per building"
+    text description
+    int capacity "required, CHECK gt 0"
+    room_class class "enum NORMAL VIP"
+    room_status status "enum AVAILABLE MAINTENANCE TEMP_UNAVAILABLE DECOMMISSIONED"
+    int version "optimistic lock"
+    timestamptz created_at "required"
+    timestamptz deleted_at "soft delete"
+  }
+
+  ROOM_TYPE {
+    uuid id PK
+    varchar code "required, unique"
+    varchar name "required"
+    boolean is_active "required"
+  }
+
+  FACILITY_TYPE {
+    uuid id PK
+    varchar code "required, unique"
+    varchar name "required"
+    varchar category
+    boolean is_active "required"
+  }
+
+  ROOM_FACILITY {
+    uuid id PK
+    uuid room_id FK "required"
+    uuid facility_type_id FK "required"
+    smallint quantity "default 1"
+    facility_state state "enum WORKING FAULTY REMOVED"
+    timestamptz last_serviced_at
+  }
+
+  ROOM_PHOTO {
+    uuid id PK
+    uuid room_id FK "required"
+    varchar cloudinary_public_id "required, unique"
+    text secure_url "required"
+    smallint sort_order
+    boolean is_primary
+    boolean approved_for_public "required"
+    timestamptz created_at "required"
+  }
+
+  ROOM_RULE {
+    uuid id PK
+    uuid room_id FK "optional, null equals building default"
+    uuid office_building_id FK "optional default scope"
+    int min_duration_minutes
+    int max_duration_minutes
+    int min_advance_minutes
+    int max_advance_days
+    int cancellation_deadline_minutes
+    boolean recurring_allowed "required"
+    boolean external_guests_allowed "required"
+    boolean approval_required "required"
+    boolean outside_hours_allowed "required"
+    int release_buffer_minutes "default 5"
+    boolean is_active "required"
+    timestamptz effective_from
+  }
+
+  ROOM_RULE_ALLOWED_DEPARTMENT {
+    uuid id PK
+    uuid room_rule_id FK "required"
+    uuid department_id FK "required"
+  }
+
+  ROOM_STATUS_HISTORY {
+    uuid id PK
+    uuid room_id FK "required"
+    room_status old_status
+    room_status new_status "required"
+    uuid changed_by_user_id FK "required"
+    text reason
+    timestamptz changed_at "required"
+  }
+
+  MAINTENANCE_PERIOD {
+    uuid id PK
+    uuid room_id FK "required"
+    tstzrange period "required, excl overlap per room"
+    text reason
+    uuid created_by_user_id FK "required"
+  }
+
+  CLOSURE_PERIOD {
+    uuid id PK
+    uuid office_building_id FK "optional, null equals nationwide"
+    tstzrange period "required"
+    text reason
+    boolean blocks_booking "required"
+  }
+
+  WORKING_CALENDAR {
+    uuid id PK
+    varchar name "required, unique"
+    uuid office_building_id FK "optional"
+    varchar timezone "required"
+    boolean is_default "required"
+    boolean is_active "required"
+  }
+
+  WORKING_DAY_WINDOW {
+    uuid id PK
+    uuid working_calendar_id FK "required"
+    smallint day_of_week "required 1-7"
+    time open_time "required"
+    time close_time "required, CHECK gt open_time"
+    boolean is_working_day "required"
+  }
+
+  HOLIDAY {
+    uuid id PK
+    uuid working_calendar_id FK "optional"
+    uuid office_building_id FK "optional, null equals nationwide"
+    date holiday_date "required, unique per calendar"
+    varchar name "required"
+    boolean blocks_booking "required default true"
+    boolean is_active "required"
+    uuid created_by_user_id FK "required"
+  }
+
+  RECURRENCE_RULE {
+    uuid id PK
+    varchar rrule "required iCal RRULE"
+    date starts_on "required"
+    date ends_on
+    int occurrence_count
+    varchar timezone "required"
+    uuid created_by_user_id FK "required"
+    timestamptz created_at "required"
+  }
+
+  BOOKING_REQUEST {
+    uuid id PK
+    varchar request_reference "required, unique"
+    request_type request_type "enum SECRETARY_REQUEST ADMIN_DIRECT_BOOKING"
+    uuid requested_by_user_id FK "required"
+    uuid department_id FK "required"
+    uuid room_id FK "required"
+    uuid office_building_id FK "required scope"
+    uuid recurrence_rule_id FK "optional, one request per occurrence"
+    varchar title "required"
+    text purpose
+    timestamptz requested_start "required"
+    timestamptz requested_end "required, CHECK gt start"
+    int attendee_count "required, CHECK gt 0"
+    boolean external_guests
+    request_status status "enum DRAFT PENDING_APPROVAL APPROVED REJECTED CANCELLED EXPIRED"
+    varchar idempotency_key "unique"
+    int version "optimistic lock"
+    timestamptz created_at "required"
+  }
+
+  APPROVAL_DECISION {
+    uuid id PK
+    uuid booking_request_id FK "required, unique for 1:1"
+    uuid decided_by_user_id FK "required, not requester"
+    decision_type decision "enum APPROVED REJECTED"
+    text comment
+    timestamptz decided_at "required"
+  }
+
+  RESERVATION {
+    uuid id PK
+    uuid booking_request_id FK "required, unique for 1:1"
+    uuid room_id FK "required"
+    uuid organizer_user_id FK "required"
+    uuid recurrence_rule_id FK "optional, series link"
+    tstzrange occupied_period "required, EXCLUDE overlap per room incl buffer"
+    timestamptz start_at "required"
+    timestamptz end_at "required"
+    int release_buffer_minutes "required default 5"
+    reservation_status status "enum CONFIRMED IN_PROGRESS COMPLETED CANCELLED RELEASED"
+    timestamptz checked_in_at
+    int version "optimistic lock"
+    timestamptz created_at "required"
+  }
+
+  MEETING {
+    uuid id PK
+    uuid reservation_id FK "required, unique for 1:1"
+    varchar title "required"
+    text agenda
+    varchar organizer_display_name "required"
+    text instructions
+    varchar contact_info
+    visibility_level visibility "enum PRIVATE INTERNAL PUBLIC"
+    timestamptz created_at "required"
+  }
+
+  MEETING_PARTICIPANT {
+    uuid id PK
+    uuid meeting_id FK "required"
+    uuid user_id FK "optional internal user"
+    varchar external_email "CHECK user_id or external_email not null"
+    varchar display_name
+    participant_role role "enum ORGANIZER REQUIRED OPTIONAL"
+    invite_status invite_status "enum INVITED ACCEPTED DECLINED"
+  }
+
+  MEETING_SHARE_LINK {
+    uuid id PK
+    uuid meeting_id FK "required"
+    varchar token_hash "required, unique, opaque"
+    uuid created_by_user_id FK "required"
+    timestamptz expires_at
+    timestamptz revoked_at
+    int view_count "default 0"
+  }
+
+  BOOKING_EXTENSION {
+    uuid id PK
+    uuid reservation_id FK "required"
+    uuid requested_by_user_id FK "required"
+    timestamptz previous_end_at "required, snapshot"
+    timestamptz requested_end_at "required, CHECK gt previous_end_at"
+    timestamptz approved_end_at "optional, set when approved"
+    extension_status status "enum PENDING APPROVED REJECTED CANCELLED"
+    uuid decided_by_user_id FK "optional"
+    text decision_comment
+    varchar idempotency_key "unique"
+    timestamptz requested_at "required"
+    timestamptz decided_at
+  }
+
+  CANCELLATION {
+    uuid id PK
+    uuid reservation_id FK "optional"
+    uuid booking_request_id FK "optional"
+    uuid cancelled_by_user_id FK "required"
+    cancellation_reason reason_code "enum USER ADMIN MAINTENANCE NO_SHOW POLICY"
+    text reason "required"
+    timestamptz cancellation_deadline_at "snapshot of policy deadline"
+    boolean override_applied "required default false"
+    text override_reason "required if override_applied"
+    timestamptz cancelled_at "required"
+  }
+
+  NOTIFICATION {
+    uuid id PK
+    uuid recipient_user_id FK "required by id, cross-service"
+    uuid notification_template_id FK "optional"
+    varchar event_type "required"
+    varchar resource_type
+    uuid resource_id
+    notification_channel channel "enum IN_APP EMAIL"
+    notification_status status "enum PENDING SENT FAILED DEAD_LETTER"
+    jsonb payload
+    timestamptz read_at
+    timestamptz created_at "required"
+  }
+
+  NOTIFICATION_TEMPLATE {
+    uuid id PK
+    varchar code "required, unique per version"
+    int version "required"
+    varchar channel "required"
+    varchar subject
+    text body_template "required"
+    boolean is_active "required"
+  }
+
+  DELIVERY_ATTEMPT {
+    uuid id PK
+    uuid notification_id FK "required"
+    smallint attempt_no "required"
+    notification_status result "required"
+    varchar provider_message_id
+    text failure_reason
+    timestamptz attempted_at "required"
+  }
+
+  USER_NOTIFICATION_PREFERENCE {
+    uuid id PK
+    uuid user_id FK "required"
+    varchar event_type "required, unique per user"
+    boolean in_app_enabled "required"
+    boolean email_enabled "required"
+  }
+
+  AUDIT_EVENT {
+    uuid id PK
+    uuid actor_user_id "id only, no FK"
+    varchar action "required"
+    varchar resource_type "required"
+    uuid resource_id
+    uuid scope_office_building_id
+    varchar outcome "required"
+    varchar correlation_id
+    jsonb metadata
+    timestamptz occurred_at "required"
+  }
+
+  AI_MODEL_VERSION {
+    uuid id PK
+    varchar name "required"
+    varchar version "required, unique with name"
+    varchar model_type "required"
+    varchar status "TRAINED APPROVED DEPLOYED RETIRED"
+    jsonb metrics
+    timestamptz deployed_at
+  }
+
+  RECOMMENDATION {
+    uuid id PK
+    uuid ai_model_version_id FK "required"
+    uuid booking_request_id "id only, optional"
+    uuid requested_by_user_id "id only"
+    jsonb request_features "required"
+    jsonb ranked_rooms "required"
+    timestamptz created_at "required"
+  }
+
+  RECOMMENDATION_FEEDBACK {
+    uuid id PK
+    uuid recommendation_id FK "required"
+    uuid chosen_room_id "id only, optional"
+    boolean accepted "required"
+    smallint rating
+    text comment
+    timestamptz created_at "required"
+  }
+
+  PREDICTION_RECORD {
+    uuid id PK
+    uuid ai_model_version_id FK "required"
+    varchar prediction_type "required"
+    uuid subject_id
+    jsonb input_features
+    jsonb output "required"
+    timestamptz created_at "required"
+  }
+
+  COUNTRY ||--o{ PROVINCE : "1..1 to 0..N"
+  PROVINCE ||--o{ DISTRICT : "1..1 to 0..N"
+  DISTRICT ||--o{ OFFICE_BUILDING : "1..1 to 0..N"
+  OFFICE_BUILDING ||--o{ FLOOR : "1..1 to 1..N"
+  OFFICE_BUILDING ||--o{ DEPARTMENT : "0..1 to 0..N"
+  DEPARTMENT ||--o{ DEPARTMENT : "0..1 parent to 0..N"
+  FLOOR ||--o{ ROOM : "1..1 to 0..N"
+  OFFICE_BUILDING ||--o{ ROOM : "1..1 to 0..N"
+  ROOM_TYPE ||--o{ ROOM : "1..1 to 0..N"
+
+  DEPARTMENT ||--o{ APP_USER : "0..1 to 0..N"
+  OFFICE_BUILDING ||--o{ APP_USER : "0..1 to 0..N"
+  APP_USER ||--o{ USER_ROLE : "1..1 to 1..N"
+  ROLE ||--o{ USER_ROLE : "1..1 to 0..N"
+  ROLE ||--o{ ROLE_PERMISSION : "1..1 to 0..N"
+  PERMISSION ||--o{ ROLE_PERMISSION : "1..1 to 0..N"
+  APP_USER ||--o{ USER_PRIVILEGE : "1..1 to 0..N"
+  APP_USER ||--o{ USER_SESSION : "1..1 to 0..N"
+  APP_USER ||--o{ USER_NOTIFICATION_PREFERENCE : "1..1 to 0..N"
+
+  ROOM ||--o{ ROOM_FACILITY : "1..1 to 0..N"
+  FACILITY_TYPE ||--o{ ROOM_FACILITY : "1..1 to 0..N"
+  ROOM ||--o{ ROOM_PHOTO : "1..1 to 0..N"
+  ROOM ||--o{ ROOM_RULE : "0..1 to 0..N"
+  OFFICE_BUILDING ||--o{ ROOM_RULE : "0..1 default to 0..N"
+  ROOM_RULE ||--o{ ROOM_RULE_ALLOWED_DEPARTMENT : "1..1 to 0..N"
+  DEPARTMENT ||--o{ ROOM_RULE_ALLOWED_DEPARTMENT : "1..1 to 0..N"
+  ROOM ||--o{ ROOM_STATUS_HISTORY : "1..1 to 0..N"
+  ROOM ||--o{ MAINTENANCE_PERIOD : "1..1 to 0..N"
+  OFFICE_BUILDING ||--o{ CLOSURE_PERIOD : "0..1 to 0..N"
+
+  WORKING_CALENDAR ||--o{ WORKING_DAY_WINDOW : "1..1 to 1..N"
+  WORKING_CALENDAR ||--o{ HOLIDAY : "0..1 to 0..N"
+  OFFICE_BUILDING ||--o| WORKING_CALENDAR : "0..1 to 0..1"
+  OFFICE_BUILDING ||--o{ HOLIDAY : "0..1 to 0..N"
+
+  APP_USER ||--o{ BOOKING_REQUEST : "1..1 requester to 0..N"
+  DEPARTMENT ||--o{ BOOKING_REQUEST : "1..1 to 0..N"
+  ROOM ||--o{ BOOKING_REQUEST : "1..1 to 0..N"
+  RECURRENCE_RULE ||--o{ BOOKING_REQUEST : "0..1 to 0..N"
+  APP_USER ||--o{ RECURRENCE_RULE : "1..1 creator to 0..N"
+  BOOKING_REQUEST ||--o| APPROVAL_DECISION : "1..1 to 0..1"
+  APP_USER ||--o{ APPROVAL_DECISION : "1..1 approver to 0..N"
+  BOOKING_REQUEST ||--o| RESERVATION : "1..1 required to 0..1"
+  ROOM ||--o{ RESERVATION : "1..1 to 0..N"
+  APP_USER ||--o{ RESERVATION : "1..1 organizer to 0..N"
+  RECURRENCE_RULE ||--o{ RESERVATION : "0..1 to 0..N"
+  RESERVATION ||--|| MEETING : "1..1 to 1..1"
+  MEETING ||--o{ MEETING_PARTICIPANT : "1..1 to 1..N"
+  APP_USER ||--o{ MEETING_PARTICIPANT : "0..1 to 0..N"
+  MEETING ||--o{ MEETING_SHARE_LINK : "1..1 to 0..N"
+  RESERVATION ||--o{ BOOKING_EXTENSION : "1..1 to 0..N"
+  APP_USER ||--o{ BOOKING_EXTENSION : "1..1 requester to 0..N"
+  RESERVATION ||--o{ CANCELLATION : "0..1 to 0..N"
+  BOOKING_REQUEST ||--o{ CANCELLATION : "0..1 to 0..N"
+  APP_USER ||--o{ CANCELLATION : "1..1 actor to 0..N"
+
+  NOTIFICATION_TEMPLATE ||--o{ NOTIFICATION : "0..1 to 0..N"
+  NOTIFICATION ||--o{ DELIVERY_ATTEMPT : "1..1 to 1..N"
+
+  AI_MODEL_VERSION ||--o{ RECOMMENDATION : "1..1 to 0..N"
+  AI_MODEL_VERSION ||--o{ PREDICTION_RECORD : "1..1 to 0..N"
+  RECOMMENDATION ||--o{ RECOMMENDATION_FEEDBACK : "1..1 to 0..N"

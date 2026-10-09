@@ -442,6 +442,21 @@ public class IdentityAuthorizationService {
                 || hasPermission(authentication, actorId, BOOKING_DIRECT_CREATE, buildingId));
     }
 
+    public BookingDirectBookingAuthority directBookingAuthority(Authentication authentication,
+                                                                 UUID departmentId, UUID buildingId,
+                                                                 boolean vipRoom) {
+        UUID actorId = actorId(authentication);
+        if (actorId == null || !isActive(actorId) || buildingId == null) {
+            return null;
+        }
+        if (hasGlobalPermission(authentication, actorId)
+                || hasPermission(authentication, actorId, BOOKING_DIRECT_CREATE, buildingId)) {
+            return BookingDirectBookingAuthority.ADMIN;
+        }
+        return canRequestBooking(authentication, departmentId, buildingId, vipRoom)
+                ? BookingDirectBookingAuthority.SECRETARY : null;
+    }
+
     public boolean canCancelBooking(Authentication authentication, UUID organizerUserId, UUID buildingId) {
         UUID actorId = actorId(authentication);
         if (actorId == null || !isActive(actorId) || buildingId == null) {

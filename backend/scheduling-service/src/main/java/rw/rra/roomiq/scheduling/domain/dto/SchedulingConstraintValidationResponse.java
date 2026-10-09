@@ -9,5 +9,6 @@ public record SchedulingConstraintValidationResponse(
         String timezone,
         boolean valid,
         int occurrencesEvaluated,
-        List<SchedulingConstraintViolation> violations) {
+        List<SchedulingConstraintViolation> violations,
+        List<SchedulingConstraintOccurrence> occurrenceIntervals) {
 }

@@ -79,8 +79,11 @@ class BookingOwnerServicesClientTests {
                         {"workingCalendarId":"%s","officeBuildingId":"%s","startsAt":"%s","endsAt":"%s","timezone":"Africa/Kigali","recurrenceRuleId":null}
                         """.formatted(calendarId, buildingId, startsAt, endsAt)))
                 .andRespond(withSuccess("""
-                        {"success":true,"message":"ok","data":{"workingCalendarId":"%s","valid":true}}
-                        """.formatted(calendarId), MediaType.APPLICATION_JSON));
+                        {"success":true,"message":"ok","data":{"workingCalendarId":"%s",
+                         "recurrenceRuleId":null,"timezone":"Africa/Kigali","valid":true,
+                         "occurrencesEvaluated":1,"occurrenceIntervals":[
+                          {"occurrenceDate":"2026-10-10","startsAt":"%s","endsAt":"%s"}]}}
+                        """.formatted(calendarId, startsAt, endsAt), MediaType.APPLICATION_JSON));
 
         var result = client.validateRequest(facts(), TOKEN, Instant.parse("2026-10-09T12:00:00Z"));
 
@@ -91,6 +94,9 @@ class BookingOwnerServicesClientTests {
         assertThat(result.timezone()).isEqualTo("Africa/Kigali");
         assertThat(result.approvalRequired()).isTrue();
         assertThat(result.releaseBufferMinutes()).isEqualTo(5);
+        assertThat(result.occurrences()).containsExactly(
+                new BookingOwnerServicesClient.SchedulingOccurrence(
+                        java.time.LocalDate.parse("2026-10-10"), startsAt, endsAt));
     }
 
     @Test

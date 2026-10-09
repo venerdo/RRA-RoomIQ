@@ -275,7 +275,7 @@ erDiagram
     uuid department_id FK "required"
     uuid room_id FK "required"
     uuid office_building_id FK "required scope"
-    uuid recurrence_rule_id FK "optional, one request per occurrence"
+    uuid recurrence_rule_id FK "optional, series recurrence rule"
     varchar title "required"
     text purpose
     timestamptz requested_start "required"
@@ -303,7 +303,7 @@ erDiagram
     uuid room_id FK "required"
     uuid organizer_user_id FK "required"
     uuid recurrence_rule_id FK "optional, series link"
-    tstzrange occupied_period "required, EXCLUDE overlap per room incl buffer"
+    tstzrange occupied_period "required, first-occurrence compatibility range incl buffer"
     timestamptz start_at "required"
     timestamptz end_at "required"
     int release_buffer_minutes "required default 5"
@@ -311,6 +311,18 @@ erDiagram
     timestamptz checked_in_at
     int version "optimistic lock"
     timestamptz created_at "required"
+  }
+
+  RESERVATION_OCCURRENCE {
+    uuid id PK
+    uuid reservation_id FK "required"
+    uuid room_id "Room owner-service ID, required; no cross-service FK"
+    timestamptz start_at "required"
+    timestamptz end_at "required, CHECK gt start"
+    tstzrange occupied_period "required, [start_at, end_at + reservation release buffer)"
+    unique reservation_id_start_at "required"
+    index reservation_id_start_at "required"
+    gist_exclude room_id_eq_occupied_period_overlap "required, concurrent overlap barrier"
   }
 
   MEETING {
@@ -515,6 +527,7 @@ erDiagram
   ROOM ||--o{ RESERVATION : "1..1 to 0..N"
   APP_USER ||--o{ RESERVATION : "1..1 organizer to 0..N"
   RECURRENCE_RULE ||--o{ RESERVATION : "0..1 to 0..N"
+  RESERVATION ||--|{ RESERVATION_OCCURRENCE : "1..1 series to 1..N occurrences"
   RESERVATION ||--|| MEETING : "1..1 to 1..1"
   MEETING ||--o{ MEETING_PARTICIPANT : "1..1 to 1..N"
   APP_USER ||--o{ MEETING_PARTICIPANT : "0..1 to 0..N"

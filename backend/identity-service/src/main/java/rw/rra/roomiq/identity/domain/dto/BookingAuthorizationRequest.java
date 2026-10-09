@@ -27,8 +27,8 @@ public record BookingAuthorizationRequest(
             case REQUEST_LIST -> departmentId == null && resourceOwnerUserId == null && vipRoom == null;
             case REQUEST_READ -> buildingId != null && resourceOwnerUserId != null
                     && departmentId == null && vipRoom == null;
-            case DIRECT_CREATE -> buildingId != null && departmentId == null
-                    && resourceOwnerUserId == null && vipRoom == null;
+            case DIRECT_CREATE -> buildingId != null && departmentId != null
+                    && resourceOwnerUserId == null && vipRoom != null;
             case APPROVE, CANCEL, EXTENSION_REQUEST, EXTENSION_DECIDE ->
                     buildingId != null && resourceOwnerUserId != null
                             && departmentId == null && vipRoom == null;

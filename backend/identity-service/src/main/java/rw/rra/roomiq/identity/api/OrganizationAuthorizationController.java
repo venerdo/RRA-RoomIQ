@@ -19,6 +19,7 @@ import rw.rra.roomiq.identity.domain.dto.RoomManagementAuthorizationResponse;
 import rw.rra.roomiq.identity.domain.dto.SchedulingAuthorizationRequest;
 import rw.rra.roomiq.identity.domain.dto.SchedulingAuthorizationResponse;
 import rw.rra.roomiq.identity.domain.security.IdentityAuthorizationService;
+import rw.rra.roomiq.identity.domain.security.BookingDirectBookingAuthority;
 
 import java.util.UUID;
 
@@ -39,7 +40,14 @@ public class OrganizationAuthorizationController {
     public ResponseEntity<BookingAuthorizationResponse> authorizeBooking(
             @Valid @RequestBody BookingAuthorizationRequest request,
             Authentication authentication) {
-        boolean allowed = switch (request.action()) {
+        BookingDirectBookingAuthority directBookingAuthority = request.action()
+                == BookingAuthorizationRequest.Action.DIRECT_CREATE
+                ? authorization.directBookingAuthority(authentication, request.departmentId(),
+                        request.buildingId(), Boolean.TRUE.equals(request.vipRoom()))
+                : null;
+        boolean allowed = request.action() == BookingAuthorizationRequest.Action.DIRECT_CREATE
+                ? directBookingAuthority != null
+                : switch (request.action()) {
             case AUTHENTICATE -> authorization.canAuthenticateBooking(authentication);
             case REQUEST_CREATE -> authorization.canRequestBooking(authentication,
                     request.departmentId(), request.buildingId(), Boolean.TRUE.equals(request.vipRoom()));
@@ -49,7 +57,7 @@ public class OrganizationAuthorizationController {
             case REQUEST_LIST -> authorization.canListBookingRequests(authentication, request.buildingId());
             case REQUEST_READ -> authorization.canReadBookingRequest(authentication,
                     request.resourceOwnerUserId(), request.buildingId());
-            case DIRECT_CREATE -> authorization.canDirectBook(authentication, request.buildingId());
+            case DIRECT_CREATE -> false;
             case APPROVE -> authorization.canApproveBooking(authentication,
                     request.resourceOwnerUserId(), request.buildingId());
             case CANCEL -> authorization.canCancelBooking(authentication,
@@ -63,12 +71,15 @@ public class OrganizationAuthorizationController {
         if (!allowed || actorUserId == null) {
             throw new AccessDeniedException("Booking access is denied");
         }
-        UUID resourceOwnerUserId = request.action() == BookingAuthorizationRequest.Action.APPROVE
-                ? request.resourceOwnerUserId() : null;
+        UUID resourceOwnerUserId = switch (request.action()) {
+            case APPROVE -> request.resourceOwnerUserId();
+            case DIRECT_CREATE -> actorUserId;
+            default -> null;
+        };
         String resourceOwnerDisplayName = resourceOwnerUserId == null
                 ? null : authorization.bookingRequesterDisplayName(resourceOwnerUserId);
         return ResponseEntity.ok(new BookingAuthorizationResponse(
-                actorUserId, resourceOwnerUserId, resourceOwnerDisplayName));
+                actorUserId, resourceOwnerUserId, resourceOwnerDisplayName, directBookingAuthority));
     }
 
     @PostMapping("/organization")

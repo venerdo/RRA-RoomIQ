@@ -17,6 +17,7 @@ import rw.rra.roomiq.common.web.DomainException;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -70,6 +71,9 @@ public class BookingOwnerServicesClient {
         if (building == null || !facts.officeBuildingId().equals(building.id()) || !building.active()) {
             throw invalidReference("The office building is missing or inactive");
         }
+        if (building.timezone() == null || building.timezone().isBlank()) {
+            throw unavailable("ORGANIZATION_SERVICE_UNAVAILABLE");
+        }
 
         DepartmentReference department = get(organizationClient, "/api/v1/departments/{id}",
                 facts.departmentId(), bearerToken, DEPARTMENT_RESPONSE, "ORGANIZATION_SERVICE_UNAVAILABLE").data();
@@ -106,10 +110,33 @@ public class BookingOwnerServicesClient {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "SCHEDULING_CONSTRAINTS_INVALID",
                     "The request conflicts with the authoritative working calendar, holiday, or closure policy");
         }
+        List<SchedulingOccurrence> occurrences = schedulingDecision.occurrenceIntervals();
+        if (occurrences == null || occurrences.isEmpty()
+                || occurrences.size() != schedulingDecision.occurrencesEvaluated()
+                || occurrences.size() > 365
+                || !calendarId.equals(schedulingDecision.workingCalendarId())
+                || !java.util.Objects.equals(facts.recurrenceRuleId(), schedulingDecision.recurrenceRuleId())
+                || !building.timezone().equals(schedulingDecision.timezone())
+                || occurrences.stream().anyMatch(java.util.Objects::isNull)
+                || !facts.startsAt().equals(occurrences.getFirst().startsAt())
+                || !facts.endsAt().equals(occurrences.getFirst().endsAt())
+                || occurrences.stream().anyMatch(occurrence -> occurrence.occurrenceDate() == null
+                        || occurrence.startsAt() == null || occurrence.endsAt() == null
+                        || !occurrence.endsAt().isAfter(occurrence.startsAt()))) {
+            throw unavailable("SCHEDULING_SERVICE_UNAVAILABLE");
+        }
+        for (int index = 1; index < occurrences.size(); index++) {
+            SchedulingOccurrence previous = occurrences.get(index - 1);
+            SchedulingOccurrence current = occurrences.get(index);
+            if (!current.occurrenceDate().isAfter(previous.occurrenceDate())
+                    || !current.startsAt().isAfter(previous.startsAt())) {
+                throw unavailable("SCHEDULING_SERVICE_UNAVAILABLE");
+            }
+        }
 
         return new ValidatedBookingReferences(room.officeBuildingId(), department.id(), room.id(),
                 "VIP".equals(room.roomClass()), building.timezone(), rule.approvalRequired(),
-                rule.releaseBufferMinutes());
+                rule.releaseBufferMinutes(), List.copyOf(occurrences));
     }
 
     private UUID resolveCalendarId(BuildingReference building, UUID officeBuildingId, String bearerToken) {
@@ -306,7 +333,11 @@ public class BookingOwnerServicesClient {
                                               Instant startsAt, Instant endsAt, String timezone,
                                               UUID recurrenceRuleId) { }
 
-    public record SchedulingDecision(boolean valid) { }
+    public record SchedulingDecision(UUID workingCalendarId, UUID recurrenceRuleId, String timezone,
+                                     boolean valid, int occurrencesEvaluated,
+                                     List<SchedulingOccurrence> occurrenceIntervals) { }
+
+    public record SchedulingOccurrence(LocalDate occurrenceDate, Instant startsAt, Instant endsAt) { }
 
     public record BookingRequestFacts(UUID departmentId, UUID roomId, UUID officeBuildingId,
                                       UUID recurrenceRuleId, Instant startsAt, Instant endsAt,
@@ -314,5 +345,5 @@ public class BookingOwnerServicesClient {
 
     public record ValidatedBookingReferences(UUID officeBuildingId, UUID departmentId, UUID roomId,
                                              boolean vipRoom, String timezone, boolean approvalRequired,
-                                             int releaseBufferMinutes) { }
+                                             int releaseBufferMinutes, List<SchedulingOccurrence> occurrences) { }
 }

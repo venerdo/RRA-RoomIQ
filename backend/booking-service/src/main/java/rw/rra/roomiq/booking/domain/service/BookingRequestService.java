@@ -187,14 +187,14 @@ public class BookingRequestService {
         return BookingRequestResponse.from(bookingRequest);
     }
 
-    private static void validateIdempotencyKey(String idempotencyKey) {
+    static void validateIdempotencyKey(String idempotencyKey) {
         if (idempotencyKey != null && !IDEMPOTENCY_KEY.matcher(idempotencyKey).matches()) {
             throw new DomainException(HttpStatus.BAD_REQUEST, "IDEMPOTENCY_KEY_INVALID",
                     "Idempotency-Key must contain 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens");
         }
     }
 
-    private static String currentBearerToken() {
+    static String currentBearerToken() {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes) {
             HttpServletRequest request = attributes.getRequest();
             String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
@@ -207,7 +207,7 @@ public class BookingRequestService {
                 "Authentication is required to validate booking references");
     }
 
-    private static boolean matches(BookingRequest existing, CreateBookingRequest request) {
+    static boolean matches(BookingRequest existing, CreateBookingRequest request) {
         return existing.getDepartmentId().equals(request.departmentId())
                 && existing.getRoomId().equals(request.roomId())
                 && existing.getOfficeBuildingId().equals(request.officeBuildingId())

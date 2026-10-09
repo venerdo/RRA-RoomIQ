@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import rw.rra.roomiq.common.web.DomainException;
 import rw.rra.roomiq.scheduling.domain.dto.SchedulingConstraintValidationResponse;
+import rw.rra.roomiq.scheduling.domain.dto.SchedulingConstraintOccurrence;
 import rw.rra.roomiq.scheduling.domain.dto.SchedulingConstraintViolation;
 import rw.rra.roomiq.scheduling.domain.dto.ValidateSchedulingConstraintsRequest;
 import rw.rra.roomiq.scheduling.domain.entity.Holiday;
@@ -85,6 +86,7 @@ public class SchedulingConstraintValidationService {
         LocalDate lastDate = occurrenceDates.getLast();
         List<Holiday> holidays = holidayRepository
                 .findAllByHolidayDateBetweenAndActiveTrueAndBlocksBookingTrue(firstDate, lastDate);
+        List<SchedulingConstraintOccurrence> occurrenceIntervals = new ArrayList<>();
 
         for (LocalDate date : occurrenceDates) {
             validateWorkingWindow(date, localStart.toLocalTime(), localEnd.toLocalTime(), windows, violations);
@@ -95,15 +97,20 @@ public class SchedulingConstraintValidationService {
 
             ResolvedInterval interval = resolveInterval(date, firstDate, localStart.toLocalTime(),
                     localEnd.toLocalTime(), request, zone, violations);
-            if (interval != null && closureRepository.existsBlockingOverlap(request.officeBuildingId(),
-                    interval.startsAt(), interval.endsAt())) {
-                violations.add(violation(date, "BLOCKING_CLOSURE",
-                        "A booking-blocking closure overlaps this occurrence"));
+            if (interval != null) {
+                occurrenceIntervals.add(new SchedulingConstraintOccurrence(date,
+                        interval.startsAt(), interval.endsAt()));
+                if (closureRepository.existsBlockingOverlap(request.officeBuildingId(),
+                        interval.startsAt(), interval.endsAt())) {
+                    violations.add(violation(date, "BLOCKING_CLOSURE",
+                            "A booking-blocking closure overlaps this occurrence"));
+                }
             }
         }
 
         return new SchedulingConstraintValidationResponse(calendar.getId(), request.recurrenceRuleId(),
-                zone.getId(), violations.isEmpty(), occurrenceDates.size(), List.copyOf(violations));
+                zone.getId(), violations.isEmpty(), occurrenceDates.size(), List.copyOf(violations),
+                List.copyOf(occurrenceIntervals));
     }
 
     private List<LocalDate> occurrenceDates(ValidateSchedulingConstraintsRequest request,

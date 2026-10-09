@@ -14,6 +14,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationRequest.Action;
+import rw.rra.roomiq.booking.integration.BookingAuthorizationResponse.DirectBookingAuthority;
 import rw.rra.roomiq.common.web.DomainException;
 
 import java.net.http.HttpClient;
@@ -50,6 +51,19 @@ public class BookingAuthorizationClient {
     public BookingAuthorizationResponse authorizeApproval(UUID requesterUserId, UUID buildingId) {
         return authorizeResponse(currentAuthorization(),
                 new BookingAuthorizationRequest(Action.APPROVE, buildingId, null, requesterUserId, null));
+    }
+
+    public BookingAuthorizationResponse authorizeDirectBooking(UUID buildingId, UUID departmentId,
+                                                               boolean vipRoom) {
+        BookingAuthorizationResponse response = authorizeResponse(currentAuthorization(),
+                new BookingAuthorizationRequest(Action.DIRECT_CREATE, buildingId, departmentId, null, vipRoom));
+        if (response.directBookingAuthority() == null
+                || !response.actorUserId().equals(response.resourceOwnerUserId())
+                || response.resourceOwnerDisplayName() == null
+                || response.resourceOwnerDisplayName().isBlank()) {
+            throw unavailable();
+        }
+        return response;
     }
 
     private BookingAuthorizationResponse authorizeResponse(String bearerToken, BookingAuthorizationRequest request) {

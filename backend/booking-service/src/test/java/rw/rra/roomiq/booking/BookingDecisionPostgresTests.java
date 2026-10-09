@@ -22,6 +22,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import rw.rra.roomiq.booking.domain.dto.BookingDecisionRequest;
 import rw.rra.roomiq.booking.domain.entity.BookingRequest;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
+import rw.rra.roomiq.booking.domain.entity.ReservationOccurrence;
 import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestStatus;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestType;
@@ -34,15 +35,19 @@ import rw.rra.roomiq.booking.domain.repository.BookingRequestRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingParticipantRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationRepository;
+import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
 import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationResponse;
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient;
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.BookingRequestFacts;
+import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.SchedulingOccurrence;
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.ValidatedBookingReferences;
 import rw.rra.roomiq.common.web.DomainException;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -89,6 +94,8 @@ class BookingDecisionPostgresTests {
     private ApprovalDecisionRepository decisions;
     @Autowired
     private ReservationRepository reservations;
+    @Autowired
+    private ReservationOccurrenceRepository reservationOccurrences;
     @Autowired
     private MeetingRepository meetings;
     @Autowired
@@ -143,6 +150,16 @@ class BookingDecisionPostgresTests {
                 FROM reservation WHERE id = ?
                 """, Long.class, reservation.getId());
         assertThat(Instant.ofEpochSecond(occupiedUntilEpoch)).isEqualTo(END.plusSeconds(900));
+        List<ReservationOccurrence> persistedOccurrences =
+                reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId());
+        assertThat(persistedOccurrences).hasSize(1);
+        assertThat(persistedOccurrences.getFirst().getStartAt()).isEqualTo(START);
+        assertThat(persistedOccurrences.getFirst().getEndAt()).isEqualTo(END);
+        Long occurrenceEnd = jdbcTemplate.queryForObject("""
+                SELECT EXTRACT(EPOCH FROM upper(occupied_period))::bigint
+                FROM reservation_occurrence WHERE id = ?
+                """, Long.class, persistedOccurrences.getFirst().getId());
+        assertThat(Instant.ofEpochSecond(occurrenceEnd)).isEqualTo(END.plusSeconds(900));
 
         var meeting = meetings.findAll().stream()
                 .filter(item -> item.getReservation().getId().equals(reservation.getId())).findFirst().orElseThrow();
@@ -173,8 +190,10 @@ class BookingDecisionPostgresTests {
                 .isEqualTo(BookingRequestStatus.REJECTED);
         assertThat(decisions.existsByBookingRequest_Id(request.getId())).isTrue();
         assertThat(reservations.existsByBookingRequest_Id(request.getId())).isFalse();
+        assertThat(reservationOccurrences.findAllByBookingRequestId(request.getId())).isEmpty();
         assertThat(meetingsForRequest(request.getId())).isZero();
         assertThat(participantsForRequest(request.getId())).isZero();
+        assertThat(reservationOccurrences.findAllByBookingRequestId(request.getId())).isEmpty();
     }
 
     @Test
@@ -322,6 +341,8 @@ class BookingDecisionPostgresTests {
                 + decisionsForRequest(secondRequest.getId())).isEqualTo(1);
         assertThat(reservationsForRequest(firstRequest.getId())
                 + reservationsForRequest(secondRequest.getId())).isEqualTo(1);
+        assertThat(occurrencesForRequest(firstRequest.getId())
+                + occurrencesForRequest(secondRequest.getId())).isEqualTo(1);
         assertThat(List.of(bookingRequests.findById(firstRequest.getId()).orElseThrow().getStatus(),
                 bookingRequests.findById(secondRequest.getId()).orElseThrow().getStatus()))
                 .containsExactlyInAnyOrder(BookingRequestStatus.APPROVED, BookingRequestStatus.PENDING_APPROVAL);
@@ -363,8 +384,10 @@ class BookingDecisionPostgresTests {
     }
 
     private ValidatedBookingReferences references(BookingRequestFacts facts, int releaseBufferMinutes) {
+        LocalDate occurrenceDate = facts.startsAt().atZone(ZoneId.of("Africa/Kigali")).toLocalDate();
         return new ValidatedBookingReferences(facts.officeBuildingId(), facts.departmentId(), facts.roomId(),
-                false, "Africa/Kigali", true, releaseBufferMinutes);
+                false, "Africa/Kigali", true, releaseBufferMinutes,
+                List.of(new SchedulingOccurrence(occurrenceDate, facts.startsAt(), facts.endsAt())));
     }
 
     private long decisionsForRequest(UUID requestId) {
@@ -390,6 +413,10 @@ class BookingDecisionPostgresTests {
                 .filter(participant -> participant.getMeeting().getReservation().getBookingRequest().getId()
                         .equals(requestId))
                 .count();
+    }
+
+    private long occurrencesForRequest(UUID requestId) {
+        return reservationOccurrences.findAllByBookingRequestId(requestId).size();
     }
 
     @TestConfiguration

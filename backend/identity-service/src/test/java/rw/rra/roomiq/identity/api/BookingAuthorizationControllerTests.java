@@ -162,6 +162,37 @@ class BookingAuthorizationControllerTests {
 
         mockMvc.perform(bookingRequest(directBooker.getId().toString(), departmentId, buildingId, false))
                 .andExpect(status().isForbidden());
+        mockMvc.perform(bookingDirect(directBooker.getId().toString(), departmentId, buildingId, false))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actorUserId").value(directBooker.getId().toString()))
+                .andExpect(jsonPath("$.resourceOwnerUserId").value(directBooker.getId().toString()))
+                .andExpect(jsonPath("$.resourceOwnerDisplayName").value("Booking Authorization Test"))
+                .andExpect(jsonPath("$.directBookingAuthority").value("ADMIN"));
+    }
+
+    @Test
+    void eligibleSecretaryDirectBookingRequiresCurrentScopeAndVipPrivilege() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser secretary = createUser("direct-secretary-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        Role secretaryRole = createRoleWithPermissions("DIRECT_SECRETARY", "BOOKING_REQUEST_CREATE");
+        userRoles.saveAndFlush(new UserRole(secretary, secretaryRole, buildingId, null));
+        String actor = secretary.getId().toString();
+
+        mockMvc.perform(bookingDirect(actor, departmentId, buildingId, false))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.directBookingAuthority").value("SECRETARY"));
+        mockMvc.perform(bookingDirect(actor, UUID.randomUUID(), buildingId, false))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(bookingDirect(actor, departmentId, buildingId, true))
+                .andExpect(status().isForbidden());
+
+        privileges.saveAndFlush(new UserPrivilege(secretary, "CG_BOOKING", null,
+                Instant.now().minusSeconds(5), Instant.now().plusSeconds(60), true));
+        mockMvc.perform(bookingDirect(actor, departmentId, buildingId, true))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.directBookingAuthority").value("SECRETARY"));
     }
 
     @Test
@@ -235,6 +266,16 @@ class BookingAuthorizationControllerTests {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                         {"action":"REQUEST_CREATE","departmentId":"%s","buildingId":"%s","vipRoom":%s}
+                        """.formatted(departmentId, buildingId, vipRoom));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder bookingDirect(
+            String tokenSubject, UUID departmentId, UUID buildingId, boolean vipRoom) {
+        return post(AUTHORIZATION_PATH)
+                .with(jwt().jwt(token -> token.subject(tokenSubject)))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"action":"DIRECT_CREATE","departmentId":"%s","buildingId":"%s","vipRoom":%s}
                         """.formatted(departmentId, buildingId, vipRoom));
     }
 

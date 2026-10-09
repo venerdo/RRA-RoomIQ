@@ -114,6 +114,9 @@ class SchedulingConstraintApiTests {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.valid").value(true))
                 .andExpect(jsonPath("$.data.occurrencesEvaluated").value(1))
+                .andExpect(jsonPath("$.data.occurrenceIntervals[0].occurrenceDate").value("2026-01-05"))
+                .andExpect(jsonPath("$.data.occurrenceIntervals[0].startsAt").value("2026-01-05T08:00:00Z"))
+                .andExpect(jsonPath("$.data.occurrenceIntervals[0].endsAt").value("2026-01-05T09:00:00Z"))
                 .andExpect(jsonPath("$.data.violations").isEmpty());
 
         verify(authorizationClient).authorize("Bearer test-token", "READ");
@@ -206,6 +209,10 @@ class SchedulingConstraintApiTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.valid").value(false))
                 .andExpect(jsonPath("$.data.occurrencesEvaluated").value(3))
+                .andExpect(jsonPath("$.data.occurrenceIntervals.length()").value(3))
+                .andExpect(jsonPath("$.data.occurrenceIntervals[1].occurrenceDate").value("2026-01-06"))
+                .andExpect(jsonPath("$.data.occurrenceIntervals[1].startsAt").value("2026-01-06T08:00:00Z"))
+                .andExpect(jsonPath("$.data.occurrenceIntervals[2].endsAt").value("2026-01-07T09:00:00Z"))
                 .andExpect(jsonPath("$.data.violations.length()").value(1))
                 .andExpect(jsonPath("$.data.violations[0].occurrenceDate").value("2026-01-06"))
                 .andExpect(jsonPath("$.data.violations[0].code").value("BLOCKING_HOLIDAY"));
@@ -225,6 +232,7 @@ class SchedulingConstraintApiTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.valid").value(false))
                 .andExpect(jsonPath("$.data.occurrencesEvaluated").value(2))
+                .andExpect(jsonPath("$.data.occurrenceIntervals.length()").value(1))
                 .andExpect(jsonPath("$.data.violations[0].occurrenceDate").value("2026-03-08"))
                 .andExpect(jsonPath("$.data.violations[0].code").value("NONEXISTENT_LOCAL_TIME"));
     }

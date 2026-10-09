@@ -63,7 +63,7 @@ class BookingRequestServiceTests {
         departmentId = UUID.randomUUID();
         roomId = UUID.randomUUID();
         references = new BookingOwnerServicesClient.ValidatedBookingReferences(
-                buildingId, departmentId, roomId, false, "Africa/Kigali", false);
+                buildingId, departmentId, roomId, false, "Africa/Kigali", false, 5);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Authorization", TOKEN);
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));

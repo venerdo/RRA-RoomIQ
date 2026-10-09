@@ -108,7 +108,8 @@ public class BookingOwnerServicesClient {
         }
 
         return new ValidatedBookingReferences(room.officeBuildingId(), department.id(), room.id(),
-                "VIP".equals(room.roomClass()), building.timezone(), rule.approvalRequired());
+                "VIP".equals(room.roomClass()), building.timezone(), rule.approvalRequired(),
+                rule.releaseBufferMinutes());
     }
 
     private UUID resolveCalendarId(BuildingReference building, UUID officeBuildingId, String bearerToken) {
@@ -312,5 +313,6 @@ public class BookingOwnerServicesClient {
                                       int attendeeCount, Boolean externalGuests) { }
 
     public record ValidatedBookingReferences(UUID officeBuildingId, UUID departmentId, UUID roomId,
-                                             boolean vipRoom, String timezone, boolean approvalRequired) { }
+                                             boolean vipRoom, String timezone, boolean approvalRequired,
+                                             int releaseBufferMinutes) { }
 }

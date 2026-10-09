@@ -90,6 +90,7 @@ class BookingOwnerServicesClientTests {
         assertThat(result.vipRoom()).isTrue();
         assertThat(result.timezone()).isEqualTo("Africa/Kigali");
         assertThat(result.approvalRequired()).isTrue();
+        assertThat(result.releaseBufferMinutes()).isEqualTo(5);
     }
 
     @Test

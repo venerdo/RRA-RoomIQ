@@ -6,4 +6,5 @@ import rw.rra.roomiq.booking.domain.entity.ApprovalDecision;
 import java.util.UUID;
 
 public interface ApprovalDecisionRepository extends JpaRepository<ApprovalDecision, UUID> {
+    boolean existsByBookingRequest_Id(UUID bookingRequestId);
 }

@@ -3,7 +3,7 @@
   "project": "RRA RoomIQ",
   "stage": "Stage 6",
   "status": "stage-6-in-progress",
-  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-03 are implemented. Booking exposes only protected request create/list/get and draft-submit operations; Organization, Room, Scheduling, and Identity owner checks use caller-token propagation and fail closed before writes. Draft submission transitions to PENDING_APPROVAL; approval/rejection, cancellation, and remaining Booking workflows are reserved for their later requirements. The recurring-series conflict policy is all-or-nothing.",
+  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-04 are implemented. Booking exposes protected request create/list/get, draft-submit, and decision operations; Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Approval revalidates current owner policy and occupancy, then atomically persists the decision, reservation, private meeting, and requester organizer participant. Rejection creates no reservation or meeting. Cancellation and remaining Booking workflows are reserved for their later requirements. The recurring-series conflict policy is all-or-nothing.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -1044,7 +1044,7 @@
       "S6-01": "complete",
       "S6-02": "complete",
       "S6-03": "complete",
-      "S6-04": "not-started",
+      "S6-04": "complete",
       "S6-05": "not-started",
       "S6-06": "not-started",
       "S6-07": "not-started",
@@ -1068,7 +1068,7 @@
     ],
     "verification": {
       "focusedBookingPostgreSql": {
-        "passed": 7,
+        "passed": 14,
         "failed": 0,
         "errors": 0,
         "skipped": 0
@@ -1087,7 +1087,7 @@
       },
       "fullBackendReactor": {
         "modules": 11,
-        "passed": 196,
+        "passed": 214,
         "failed": 0,
         "errors": 0,
         "skipped": 0
@@ -1099,14 +1099,51 @@
         "skipped": 0
       },
       "bookingModuleSuite": {
-        "passed": 31,
+        "passed": 49,
         "failed": 0,
         "errors": 0,
         "skipped": 0
       }
     },
     "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
-    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, and POST /api/v1/booking-requests/{id}/submit. S6-02 owner-service checks and S6-03 request create/read/draft-submit are implemented. No approval, reservation, meeting, cancellation, extension, share-link, occupancy-provider, or Gateway route is exposed.",
+    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, and POST /api/v1/booking-requests/{id}/decision. S6-02 through S6-04 authorization and request/decision workflows are implemented. Cancellation, extension, share-link, occupancy-provider, and Gateway routes are not exposed.",
+    "decisionOperation": {
+      "method": "POST",
+      "path": "/api/v1/booking-requests/{id}/decision",
+      "authentication": "Bearer token required; Booking authorizes the current Identity account and revalidates the decision against current owner-service data. No API Gateway route is configured.",
+      "request": {
+        "decision": ["APPROVED", "REJECTED"],
+        "comment": "optional string"
+      },
+      "successResponse": {
+        "envelope": "ApiResponse<BookingDecisionResponse>",
+        "dataFields": [
+          "bookingRequestId",
+          "requestStatus",
+          "decision",
+          "decidedByUserId",
+          "decidedAt",
+          "comment",
+          "reservationId",
+          "meetingId"
+        ],
+        "rejection": "reservationId and meetingId are null"
+      },
+      "approval": "Locks the request, rejects requester self-approval and stale/repeated decisions, revalidates Organization, Room, Scheduling, and Booking-owned occupancy, then atomically persists the decision, CONFIRMED reservation with the current release buffer, PRIVATE meeting, and requester as accepted ORGANIZER participant.",
+      "rejection": "Persists the REJECTED decision and request state without creating a reservation or meeting.",
+      "concurrency": "Request row lock plus existing ERD uniqueness and PostgreSQL room-overlap exclusion constraints prevent competing decisions and overlapping confirmations; transaction rollback prevents partial records.",
+      "stableErrors": [
+        "BOOKING_DECISION_INVALID",
+        "BOOKING_REQUEST_NOT_FOUND",
+        "BOOKING_SELF_APPROVAL_DENIED",
+        "BOOKING_REQUEST_STATE_CONFLICT",
+        "BOOKING_DECISION_CONFLICT",
+        "ROOM_OCCUPANCY_CONFLICT",
+        "BOOKING_REQUESTER_IDENTITY_INVALID",
+        "BOOKING_OWNER_DATA_INCONSISTENT",
+        "ROOM_BOOKING_POLICY_UNAVAILABLE"
+      ]
+    },
     "erdOrRequirementsChanges": "None."
   },
   "schedulingApiExposurePolicy": {
@@ -1122,14 +1159,15 @@
       "POST /api/v1/booking-requests",
       "GET /api/v1/booking-requests",
       "GET /api/v1/booking-requests/{id}",
-      "POST /api/v1/booking-requests/{id}/submit"
+      "POST /api/v1/booking-requests/{id}/submit",
+      "POST /api/v1/booking-requests/{id}/decision"
     ],
     "authenticationAndAuthorization": "Every route requires a bearer token and current Identity authorization. Create and submit additionally require current requester permission, department/building scope, and VIP privilege when applicable; list/get enforce requester or scoped reviewer access.",
     "ownerServices": "Create and submit forward the caller token to Organization, Room, and Scheduling APIs. Current building, department, room status/capacity/rules, calendar/timezone, recurrence, working windows, holidays, and closures are validated before writes. Missing, denied, inconsistent, or unavailable owner data fails closed.",
-    "requestLifecycle": "Create stores a validated DRAFT. POST /api/v1/booking-requests/{id}/submit is requester-only, locks the draft, revalidates current owner and Identity policies, and transitions to PENDING_APPROVAL. Approval/rejection and cancellation are later Stage 6 requirements; requests are never auto-confirmed by this API.",
+    "requestLifecycle": "Create stores a validated DRAFT. POST /api/v1/booking-requests/{id}/submit is requester-only, locks the draft, revalidates current owner and Identity policies, and transitions to PENDING_APPROVAL. POST /api/v1/booking-requests/{id}/decision permits an authorized scoped approver to approve or reject only a pending request; self-approval is denied. Approval revalidates current policy and occupancy and atomically creates a confirmed reservation, private meeting, and accepted requester organizer participant. Rejection creates no reservation or meeting. No policy-inferred or implicit auto-confirm occurs.",
     "callerControlledFields": "Requester identity, request type, status, approval outcome, and organizational authorization are derived from persisted data, Identity, and owner services, not caller-supplied payload fields.",
     "gateway": "No Booking route is configured on the API Gateway; publication and routing remain deferred to Stage 11.",
-    "futureWorkflows": "Approval/rejection, direct booking, reservations, meetings, cancellation, extensions, share links, and the Booking occupancy provider are not exposed."
+    "futureWorkflows": "Direct booking, cancellation, extensions, share links, and the Booking occupancy provider are not exposed."
   },
   "authorizationPolicyDocumentation": "identity-service/AUTHORIZATION.md",
   "authorization": {
@@ -1152,7 +1190,7 @@
     "organizationPolicy": "POST /api/v1/internal/authorization/organization evaluates READ or MANAGE against the authenticated active Identity account and current system-admin permission.",
     "schedulingPolicy": "POST /api/v1/internal/authorization/scheduling allows READ for active Identity accounts and requires IDENTITY_SYSTEM_ADMIN for MANAGE; its actorUserId response supplies trusted Holiday creator attribution.",
     "roomManagementPolicy": "POST /api/v1/internal/authorization/room-management evaluates ROOM_MANAGE for a building scope or global system-admin authority for a null scope, then returns actorUserId from the authenticated principal.",
-    "bookingPolicy": "POST /api/v1/internal/authorization/booking is bearer-protected and evaluates supported Booking actions against the current authenticated Identity account, permissions, department/building scope, requester ownership, and effective CG_BOOKING privilege. REQUEST_SUBMIT is restricted to the persisted request owner. Identity derives actorUserId from the validated bearer token. Booking forwards the caller token and fails closed on missing, denied, unavailable, or incomplete Identity responses.",
+    "bookingPolicy": "POST /api/v1/internal/authorization/booking is bearer-protected and evaluates supported Booking actions against the current authenticated Identity account, permissions, department/building scope, requester ownership, and effective CG_BOOKING privilege. REQUEST_SUBMIT is restricted to the persisted request owner. For an authorized APPROVE decision only, Identity returns the active persisted requester's ID and trusted display name (displayName, falling back to fullName) for initial meeting organizer attribution. Identity derives actorUserId from the validated bearer token. Booking forwards the caller token and fails closed on missing, denied, unavailable, or incomplete Identity responses. This is an internal service integration and not a public Gateway route.",
     "privilegeGrantor": "The authenticated actor is persisted as grantor; a client-supplied grantedByUserId is ignored.",
     "bootstrap": "No public Super Admin bootstrap endpoint exists."
   },

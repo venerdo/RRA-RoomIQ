@@ -67,6 +67,30 @@ class BookingAuthorizationClientTests {
     }
 
     @Test
+    void approvalAuthorizationReturnsIdentityDerivedRequesterProfile() {
+        UUID actorId = UUID.randomUUID();
+        UUID requesterId = UUID.randomUUID();
+        UUID buildingId = UUID.randomUUID();
+        server.expect(requestTo(URL + "/api/v1/internal/authorization/booking"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Authorization", CALLER_TOKEN))
+                .andExpect(jsonPath("$.action").value("APPROVE"))
+                .andExpect(jsonPath("$.resourceOwnerUserId").value(requesterId.toString()))
+                .andExpect(jsonPath("$.buildingId").value(buildingId.toString()))
+                .andRespond(withSuccess("""
+                        {"actorUserId":"%s","resourceOwnerUserId":"%s",
+                         "resourceOwnerDisplayName":"Trusted Requester"}
+                        """.formatted(actorId, requesterId), MediaType.APPLICATION_JSON));
+
+        BookingAuthorizationResponse response = client.authorizeApproval(requesterId, buildingId);
+
+        assertThat(response.actorUserId()).isEqualTo(actorId);
+        assertThat(response.resourceOwnerUserId()).isEqualTo(requesterId);
+        assertThat(response.resourceOwnerDisplayName()).isEqualTo("Trusted Requester");
+        server.verify();
+    }
+
+    @Test
     void mapsIdentityAuthenticationFailureWithoutProceeding() {
         server.expect(requestTo(URL + "/api/v1/internal/authorization/booking"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));

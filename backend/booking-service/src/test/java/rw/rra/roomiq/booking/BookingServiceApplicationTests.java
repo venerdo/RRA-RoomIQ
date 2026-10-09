@@ -122,6 +122,7 @@ class BookingServiceApplicationTests {
         assertThat(apiRoutes).containsExactlyInAnyOrder(
                 "/api/v1/booking-requests",
                 "/api/v1/booking-requests/{id}/submit",
+                "/api/v1/booking-requests/{id}/decision",
                 "/api/v1/booking-requests/{id}");
     }
 

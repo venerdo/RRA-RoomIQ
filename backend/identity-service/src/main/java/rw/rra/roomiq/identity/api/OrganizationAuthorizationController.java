@@ -20,6 +20,8 @@ import rw.rra.roomiq.identity.domain.dto.SchedulingAuthorizationRequest;
 import rw.rra.roomiq.identity.domain.dto.SchedulingAuthorizationResponse;
 import rw.rra.roomiq.identity.domain.security.IdentityAuthorizationService;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/v1/internal/authorization")
 @Tag(name = "Internal authorization")
@@ -61,7 +63,12 @@ public class OrganizationAuthorizationController {
         if (!allowed || actorUserId == null) {
             throw new AccessDeniedException("Booking access is denied");
         }
-        return ResponseEntity.ok(new BookingAuthorizationResponse(actorUserId));
+        UUID resourceOwnerUserId = request.action() == BookingAuthorizationRequest.Action.APPROVE
+                ? request.resourceOwnerUserId() : null;
+        String resourceOwnerDisplayName = resourceOwnerUserId == null
+                ? null : authorization.bookingRequesterDisplayName(resourceOwnerUserId);
+        return ResponseEntity.ok(new BookingAuthorizationResponse(
+                actorUserId, resourceOwnerUserId, resourceOwnerDisplayName));
     }
 
     @PostMapping("/organization")

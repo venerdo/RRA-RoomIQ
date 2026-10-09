@@ -17,7 +17,10 @@ import org.springframework.web.bind.annotation.RestController;
 import rw.rra.roomiq.booking.domain.dto.BookingRequestPageQuery;
 import rw.rra.roomiq.booking.domain.dto.BookingRequestPageResponse;
 import rw.rra.roomiq.booking.domain.dto.BookingRequestResponse;
+import rw.rra.roomiq.booking.domain.dto.BookingDecisionRequest;
+import rw.rra.roomiq.booking.domain.dto.BookingDecisionResponse;
 import rw.rra.roomiq.booking.domain.dto.CreateBookingRequest;
+import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
 import rw.rra.roomiq.booking.domain.service.BookingRequestService;
 import rw.rra.roomiq.common.web.ApiResponse;
 
@@ -31,9 +34,11 @@ import java.util.UUID;
         responseCode = "401", description = "Authentication required")
 public class BookingRequestController {
     private final BookingRequestService service;
+    private final BookingDecisionService decisionService;
 
-    public BookingRequestController(BookingRequestService service) {
+    public BookingRequestController(BookingRequestService service, BookingDecisionService decisionService) {
         this.service = service;
+        this.decisionService = decisionService;
     }
 
     @PostMapping
@@ -67,6 +72,24 @@ public class BookingRequestController {
             responseCode = "503", description = "An authoritative owner service is unavailable")
     public ApiResponse<BookingRequestResponse> submit(@PathVariable UUID id) {
         return ApiResponse.success("Booking request submitted for approval", service.submit(id));
+    }
+
+    @PostMapping("/{id}/decision")
+    @Operation(summary = "Approve or reject a pending booking request",
+            description = "Requires current scoped Admin or Super Admin authority. Requesters cannot decide their own requests. Approval revalidates Identity, Organization, Room and Scheduling data, current occupancy, and the release buffer, then atomically creates the decision, confirmed reservation, private meeting, and organizer participant.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+            responseCode = "200", description = "Booking request decision persisted")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+            responseCode = "403", description = "Current approval authority or building scope is denied")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+            responseCode = "409", description = "Request is stale, already decided, or the room interval conflicts")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+            responseCode = "422", description = "Current room or scheduling policy rejects approval")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(
+            responseCode = "503", description = "An authoritative owner service is unavailable or inconsistent")
+    public ApiResponse<BookingDecisionResponse> decide(@PathVariable UUID id,
+                                                        @Valid @RequestBody BookingDecisionRequest request) {
+        return ApiResponse.success("Booking request decision recorded", decisionService.decide(id, request));
     }
 
     @GetMapping

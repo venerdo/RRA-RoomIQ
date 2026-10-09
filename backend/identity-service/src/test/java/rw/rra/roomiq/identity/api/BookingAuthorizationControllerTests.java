@@ -201,7 +201,9 @@ class BookingAuthorizationControllerTests {
 
         mockMvc.perform(bookingDecision(approverToken, "APPROVE", requester.getId(), buildingId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.actorUserId").value(approverToken));
+                .andExpect(jsonPath("$.actorUserId").value(approverToken))
+                .andExpect(jsonPath("$.resourceOwnerUserId").value(requester.getId().toString()))
+                .andExpect(jsonPath("$.resourceOwnerDisplayName").value("Booking Authorization Test"));
         mockMvc.perform(bookingDecision(approverToken, "APPROVE", approver.getId(), buildingId))
                 .andExpect(status().isForbidden());
         mockMvc.perform(bookingDecision(approverToken, "APPROVE", otherBuildingRequester.getId(), otherBuildingId))

@@ -120,4 +120,20 @@ public class BookingRequest extends BookingEntity {
         status = BookingRequestStatus.PENDING_APPROVAL;
         return true;
     }
+
+    public boolean approve() {
+        if (status != BookingRequestStatus.PENDING_APPROVAL) {
+            return false;
+        }
+        status = BookingRequestStatus.APPROVED;
+        return true;
+    }
+
+    public boolean reject() {
+        if (status != BookingRequestStatus.PENDING_APPROVAL) {
+            return false;
+        }
+        status = BookingRequestStatus.REJECTED;
+        return true;
+    }
 }

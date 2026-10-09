@@ -9,8 +9,11 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import rw.rra.roomiq.booking.domain.dto.BookingRequestPageResponse;
 import rw.rra.roomiq.booking.domain.dto.BookingRequestResponse;
+import rw.rra.roomiq.booking.domain.dto.BookingDecisionResponse;
+import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestStatus;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestType;
+import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
 import rw.rra.roomiq.booking.domain.service.BookingRequestService;
 
 import java.time.Instant;
@@ -33,12 +36,15 @@ class BookingRequestControllerTests {
     @Mock
     private BookingRequestService service;
 
+    @Mock
+    private BookingDecisionService decisionService;
+
     private MockMvc mockMvc;
     private BookingRequestResponse requestResponse;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new BookingRequestController(service)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(new BookingRequestController(service, decisionService)).build();
         requestResponse = new BookingRequestResponse(
                 UUID.randomUUID(), "BR-test", BookingRequestType.SECRETARY_REQUEST, UUID.randomUUID(),
                 UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), null, "Planning meeting",
@@ -119,5 +125,38 @@ class BookingRequestControllerTests {
                 .andExpect(jsonPath("$.data.status").value("PENDING_APPROVAL"));
 
         verify(service).submit(requestResponse.id());
+    }
+
+    @Test
+    void decisionEndpointAcceptsOnlyTheDecisionAndOptionalComment() throws Exception {
+        UUID approverId = UUID.randomUUID();
+        UUID reservationId = UUID.randomUUID();
+        UUID meetingId = UUID.randomUUID();
+        when(decisionService.decide(any(), any())).thenReturn(new BookingDecisionResponse(
+                requestResponse.id(), BookingRequestStatus.APPROVED, ApprovalDecisionType.APPROVED,
+                approverId, Instant.parse("2026-10-09T12:00:00Z"), "Reviewed", reservationId, meetingId));
+
+        mockMvc.perform(post("/api/v1/booking-requests/{id}/decision", requestResponse.id())
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"decision":"APPROVED","comment":"Reviewed"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.requestStatus").value("APPROVED"))
+                .andExpect(jsonPath("$.data.decidedByUserId").value(approverId.toString()))
+                .andExpect(jsonPath("$.data.reservationId").value(reservationId.toString()))
+                .andExpect(jsonPath("$.data.meetingId").value(meetingId.toString()));
+
+        verify(decisionService).decide(any(), any());
+    }
+
+    @Test
+    void decisionEndpointRejectsMissingDecision() throws Exception {
+        mockMvc.perform(post("/api/v1/booking-requests/{id}/decision", requestResponse.id())
+                        .contentType(APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+
+        verify(decisionService, never()).decide(any(), any());
     }
 }

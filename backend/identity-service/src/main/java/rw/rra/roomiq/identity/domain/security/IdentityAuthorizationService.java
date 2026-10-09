@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import rw.rra.roomiq.identity.domain.entity.AppUser;
 import rw.rra.roomiq.identity.domain.entity.Role;
+import rw.rra.roomiq.identity.domain.entity.UserStatus;
 import rw.rra.roomiq.identity.domain.repository.AppUserRepository;
 import rw.rra.roomiq.identity.domain.repository.IdentityAuthorizationRepository;
 import rw.rra.roomiq.identity.domain.repository.RoleRepository;
@@ -420,6 +421,18 @@ public class IdentityAuthorizationService {
         }
         return hasGlobalPermission(authentication, actorId)
                 || hasPermission(authentication, actorId, BOOKING_APPROVE, buildingId);
+    }
+
+    public String bookingRequesterDisplayName(UUID requesterUserId) {
+        if (requesterUserId == null) {
+            return null;
+        }
+        AppUser requester = users.findById(requesterUserId).orElse(null);
+        if (requester == null || requester.getStatus() != UserStatus.ACTIVE) {
+            return null;
+        }
+        String displayName = requester.getDisplayName();
+        return displayName == null || displayName.isBlank() ? requester.getFullName() : displayName;
     }
 
     public boolean canDirectBook(Authentication authentication, UUID buildingId) {

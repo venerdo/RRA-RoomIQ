@@ -44,6 +44,15 @@ public class BookingAuthorizationClient {
     }
 
     public UUID authorize(String bearerToken, BookingAuthorizationRequest request) {
+        return authorizeResponse(bearerToken, request).actorUserId();
+    }
+
+    public BookingAuthorizationResponse authorizeApproval(UUID requesterUserId, UUID buildingId) {
+        return authorizeResponse(currentAuthorization(),
+                new BookingAuthorizationRequest(Action.APPROVE, buildingId, null, requesterUserId, null));
+    }
+
+    private BookingAuthorizationResponse authorizeResponse(String bearerToken, BookingAuthorizationRequest request) {
         if (!isBearerToken(bearerToken) || request == null || request.action() == null) {
             throw authenticationRequired();
         }
@@ -58,7 +67,7 @@ public class BookingAuthorizationClient {
             if (response == null || response.actorUserId() == null) {
                 throw unavailable();
             }
-            return response.actorUserId();
+            return response;
         } catch (HttpClientErrorException.Unauthorized exception) {
             throw authenticationRequired();
         } catch (HttpClientErrorException.Forbidden exception) {

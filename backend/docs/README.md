@@ -2,11 +2,11 @@
 
 ## Implementation roadmap
 
-The authoritative end-to-end roadmap, requirement checklists, and stage-gate rules are maintained in [Backend Documentation](../Documentation.md#end-to-end-implementation-roadmap). Stages 3 through 5 are accepted. The proposed Stage 6 checklist is documented there; implementation has not started and checklist approval is pending. The user selected all-or-nothing handling for recurring-series conflicts.
+The authoritative end-to-end roadmap, requirement checklists, and stage-gate rules are maintained in [Backend Documentation](../Documentation.md#end-to-end-implementation-roadmap). Stages 3 through 5 are accepted, and the Stage 6 checklist is approved. S6-01 persistence is complete; the S6-02 Identity authorization foundation is implemented, but owner-service validation calls await Booking workflows. The user selected all-or-nothing handling for recurring-series conflicts.
 
 ## Stage 1 status
 
-Stage 1 is complete and verified. Stage 2 is complete through S2-18 verification. Stages 3, 4, and 5 are accepted. Scheduling owns calendar rules, bounded date-based recurrence evaluation, constraint validation, and candidate availability; Room retains maintenance/status, while Booking owns reservation occupancy and its transactional conflict barrier in S6. Non-empty availability candidates fail closed until Booking implements its occupancy provider. All Scheduling business routes require an Identity-issued bearer token and server-side authorization; they are not routed through the API Gateway in Stage 5. Production deployment must enforce private network ingress. Stage 6's proposed requirement checklist is in the roadmap; Booking remains a scaffold and no Stage 6 API is implemented or exposed.
+Stage 1 is complete and verified. Stage 2 is complete through S2-18 verification. Stages 3, 4, and 5 are accepted. Scheduling owns calendar rules, bounded date-based recurrence evaluation, constraint validation, and candidate availability; Room retains maintenance/status, while Booking owns reservation occupancy and its transactional conflict barrier in S6. Non-empty availability candidates fail closed until Booking implements its occupancy provider. All Scheduling business routes require an Identity-issued bearer token and server-side authorization; they are not routed through the API Gateway in Stage 5. Production deployment must enforce private network ingress. The Stage 6 checklist is approved; S6-01 persistence and the S6-02 Identity authorization foundation are implemented. Booking workflows and Organization/Room/Scheduling owner API checks remain unimplemented; S6-02 is partial and S6-03 is next.
 
 ### SRS/ERD traceability
 

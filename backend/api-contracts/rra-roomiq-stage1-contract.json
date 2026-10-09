@@ -2,8 +2,8 @@
   "apiVersion": "1.0.0",
   "project": "RRA RoomIQ",
   "stage": "Stage 6",
-  "status": "stage-6-checklist-proposed",
-  "stageStatusReason": "Stages 3, 4, and 5 are accepted. The proposed Stage 6 Booking checklist is in Backend Documentation; implementation has not started and checklist approval is pending. The recurring-series conflict policy is all-or-nothing. No Stage 6 Booking endpoints are implemented or exposed.",
+  "status": "stage-6-in-progress",
+  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 Booking persistence is complete. The S6-02 Identity authorization foundation, caller-token client, protected route guard, and fail-closed behavior are implemented; owner-service checks remain pending integration with Booking workflows. The recurring-series conflict policy is all-or-nothing. No Stage 6 Booking business endpoints are implemented or exposed.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -230,7 +230,7 @@
       },
       "securityRequirements": "Protected user, role/permission, privilege, and internal authorization operations require bearerAuth; login, refresh, and logout are public and omit operation-level security.",
       "schemasAndResponses": "Springdoc publishes request/response DTO schemas and documented validation, authentication, authorization, not-found, and conflict responses.",
-      "verification": "AuthenticationControllerTests inspect /v3/api-docs and verify all 26 operations, operation summaries, DTO schema, JWT scheme, tags, and public/protected security requirements, including the Scheduling authorization endpoint."
+      "verification": "AuthenticationControllerTests inspect /v3/api-docs and verify all 27 operations, operation summaries, DTO schema, JWT scheme, tags, and public/protected security requirements, including Booking, Room, and Scheduling authorization endpoints."
     },
     "S2-14": {
       "name": "Identity error and audit behavior",
@@ -1021,9 +1021,9 @@
     }
   },
   "stage6Progress": {
-    "status": "checklist-proposed",
-    "implementationStarted": false,
-    "checklist": "Documentation.md#stage-6-requirement-checklist-proposed-pending-user-approval",
+    "status": "in-progress",
+    "implementationStarted": true,
+    "checklist": "Documentation.md#stage-6-requirement-checklist-approved",
     "requirements": [
       "S6-01",
       "S6-02",
@@ -1040,11 +1040,74 @@
       "S6-13",
       "S6-14"
     ],
-    "pendingDecisions": [
-      "User approval of the proposed S6 checklist"
+    "requirementStatuses": {
+      "S6-01": "complete",
+      "S6-02": "partial",
+      "S6-03": "not-started",
+      "S6-04": "not-started",
+      "S6-05": "not-started",
+      "S6-06": "not-started",
+      "S6-07": "not-started",
+      "S6-08": "not-started",
+      "S6-09": "not-started",
+      "S6-10": "not-started",
+      "S6-11": "not-started",
+      "S6-12": "not-started",
+      "S6-13": "not-started",
+      "S6-14": "not-started"
+    },
+    "persistenceTables": [
+      "booking_request",
+      "approval_decision",
+      "reservation",
+      "meeting",
+      "meeting_participant",
+      "meeting_share_link",
+      "booking_extension",
+      "cancellation"
     ],
+    "verification": {
+      "focusedBookingPostgreSql": {
+        "passed": 6,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "identityService": {
+        "passed": 42,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "commonWeb": {
+        "passed": 6,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "fullBackendReactor": {
+        "modules": 11,
+        "passed": 178,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "bookingAuthorizationFocused": {
+        "passed": 9,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "bookingModuleSuite": {
+        "passed": 16,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
     "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
-    "endpointStatus": "No Stage 6 Booking workflow or occupancy-provider API is currently implemented or exposed."
+    "endpointStatus": "No Stage 6 Booking business workflow or occupancy-provider API is currently implemented or exposed. Identity's bearer-protected POST /api/v1/internal/authorization/booking exists for internal authorization decisions. Organization, Room, and Scheduling owner API checks remain unconnected pending Booking workflows; S6-02 is partial.",
+    "erdOrRequirementsChanges": "None."
   },
   "schedulingApiExposurePolicy": {
     "businessRoutes": "/api/v1/**",
@@ -1075,6 +1138,7 @@
     "organizationPolicy": "POST /api/v1/internal/authorization/organization evaluates READ or MANAGE against the authenticated active Identity account and current system-admin permission.",
     "schedulingPolicy": "POST /api/v1/internal/authorization/scheduling allows READ for active Identity accounts and requires IDENTITY_SYSTEM_ADMIN for MANAGE; its actorUserId response supplies trusted Holiday creator attribution.",
     "roomManagementPolicy": "POST /api/v1/internal/authorization/room-management evaluates ROOM_MANAGE for a building scope or global system-admin authority for a null scope, then returns actorUserId from the authenticated principal.",
+    "bookingPolicy": "POST /api/v1/internal/authorization/booking is bearer-protected and evaluates supported Booking actions against the current authenticated Identity account, permissions, building scope, and effective CG_BOOKING privilege. Identity derives actorUserId from the validated bearer token. Booking forwards the caller token and fails closed on missing, denied, unavailable, or incomplete Identity responses. Organization, Room, and Scheduling owner API checks remain pending workflow integration; no Booking business API is exposed.",
     "privilegeGrantor": "The authenticated actor is persisted as grantor; a client-supplied grantedByUserId is ignored.",
     "bootstrap": "No public Super Admin bootstrap endpoint exists."
   },

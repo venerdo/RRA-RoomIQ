@@ -3,8 +3,25 @@ spring:
     import: optional:file:.env[.properties]
   application:
     name: booking-service
+  datasource:
+    url: ${BOOKING_DB_URL:jdbc:postgresql://localhost:5432/roomiq_booking}
+    username: ${BOOKING_DB_USERNAME:roomiq}
+    password: ${BOOKING_DB_PASSWORD:roomiq}
+  flyway:
+    enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
 server:
   port: ${BOOKING_SERVICE_PORT:8085}
+roomiq:
+  identity:
+    url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
 management:
   endpoints:
     web:

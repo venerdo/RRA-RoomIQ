@@ -19,4 +19,4 @@ Stage 2 identity requirements S2-01 through S2-18 and Stage 3 S3-01 through S3-1
 
 ## Next stage
 
-Stages 3, 4, and 5 are accepted. The Stage 6 checklist is proposed in [Backend Documentation](../Documentation.md#stage-6-requirement-checklist-proposed-pending-user-approval); no Booking workflow API has been implemented or exposed. Checklist approval is pending. The user selected all-or-nothing recurring-series conflict handling, with no partial persistence when an occurrence fails.
+Stages 3, 4, and 5 are accepted, and the Stage 6 checklist is approved in [Backend Documentation](../Documentation.md#stage-6-requirement-checklist-approved). Booking's S6-01 PostgreSQL persistence is complete; the S6-02 Identity authorization foundation is implemented, but owner-service checks remain unconnected because Booking workflows do not yet exist. Booking forwards the caller's Identity bearer token, derives its actor from Identity, and fails closed on authorization dependency failures. No Booking business APIs are implemented or exposed. The user selected all-or-nothing recurring-series conflict handling, with no partial persistence when an occurrence fails.

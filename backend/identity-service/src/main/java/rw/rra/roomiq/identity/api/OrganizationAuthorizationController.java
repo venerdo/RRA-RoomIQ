@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import rw.rra.roomiq.identity.domain.dto.BookingAuthorizationRequest;
+import rw.rra.roomiq.identity.domain.dto.BookingAuthorizationResponse;
 import rw.rra.roomiq.identity.domain.dto.OrganizationAuthorizationRequest;
 import rw.rra.roomiq.identity.domain.dto.RoomManagementAuthorizationRequest;
 import rw.rra.roomiq.identity.domain.dto.RoomManagementAuthorizationResponse;
@@ -27,6 +29,33 @@ public class OrganizationAuthorizationController {
 
     public OrganizationAuthorizationController(IdentityAuthorizationService authorization) {
         this.authorization = authorization;
+    }
+
+    @PostMapping("/booking")
+    @Operation(summary = "Authorize a Booking operation",
+            description = "Evaluate the authenticated active user's current Booking permission, privilege, and building scope. Resource owner identifiers must come from Booking-owned persisted records.")
+    public ResponseEntity<BookingAuthorizationResponse> authorizeBooking(
+            @Valid @RequestBody BookingAuthorizationRequest request,
+            Authentication authentication) {
+        boolean allowed = switch (request.action()) {
+            case AUTHENTICATE -> authorization.canAuthenticateBooking(authentication);
+            case REQUEST_CREATE -> authorization.canRequestBooking(authentication,
+                    request.departmentId(), request.buildingId(), Boolean.TRUE.equals(request.vipRoom()));
+            case DIRECT_CREATE -> authorization.canDirectBook(authentication, request.buildingId());
+            case APPROVE -> authorization.canApproveBooking(authentication,
+                    request.resourceOwnerUserId(), request.buildingId());
+            case CANCEL -> authorization.canCancelBooking(authentication,
+                    request.resourceOwnerUserId(), request.buildingId());
+            case EXTENSION_REQUEST -> authorization.canRequestBookingExtension(authentication,
+                    request.resourceOwnerUserId(), request.buildingId());
+            case EXTENSION_DECIDE -> authorization.canDecideBookingExtension(authentication,
+                    request.resourceOwnerUserId(), request.buildingId());
+        };
+        var actorUserId = authorization.authenticatedUserId(authentication);
+        if (!allowed || actorUserId == null) {
+            throw new AccessDeniedException("Booking access is denied");
+        }
+        return ResponseEntity.ok(new BookingAuthorizationResponse(actorUserId));
     }
 
     @PostMapping("/organization")

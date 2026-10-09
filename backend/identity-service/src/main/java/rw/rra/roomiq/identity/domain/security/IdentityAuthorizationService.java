@@ -358,6 +358,18 @@ public class IdentityAuthorizationService {
         return !vipRoom || hasActivePrivilege(actorId, "CG_BOOKING", at == null ? Instant.now() : at);
     }
 
+    public boolean canAuthenticateBooking(Authentication authentication) {
+        UUID actorId = actorId(authentication);
+        return actorId != null && isActive(actorId);
+    }
+
+    public boolean canRequestBooking(Authentication authentication, UUID departmentId,
+                                     UUID buildingId, boolean vipRoom) {
+        UUID actorId = actorId(authentication);
+        return actorId != null && canRequestBooking(authentication, actorId,
+                departmentId, buildingId, vipRoom, Instant.now());
+    }
+
     public boolean canApproveBooking(Authentication authentication, UUID requesterUserId, UUID buildingId) {
         UUID actorId = actorId(authentication);
         if (actorId == null || !isActive(actorId) || actorId.equals(requesterUserId) || buildingId == null) {

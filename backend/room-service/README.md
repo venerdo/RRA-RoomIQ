@@ -2,7 +2,7 @@
 
 ## Current scope
 
-S4-01 through S4-12 are complete, verified, and accepted by the user. Flyway V1 creates the Room Service-owned room/resource schema from the approved ERD, V2 adds case-insensitive building-scoped room-name/code indexes, V3 enforces rule scope ownership, Room writes delegate authorization to Identity, all 31 `/api/v1` operations are documented, and focused/cross-stage verification passes. Stage 5 is in progress.
+S4-01 through S4-12 are complete, verified, and accepted by the user. Flyway V1 creates the Room Service-owned room/resource schema from the approved ERD, V2 adds case-insensitive building-scoped room-name/code indexes, V3 enforces rule scope ownership, Room writes delegate authorization to Identity, all 31 `/api/v1` operations are documented, and focused/cross-stage verification passes. Stage 5 S5-06 consumes Room's protected owner APIs for availability candidates; Scheduling does not access Room persistence directly.
 
 ## Persistence boundary
 

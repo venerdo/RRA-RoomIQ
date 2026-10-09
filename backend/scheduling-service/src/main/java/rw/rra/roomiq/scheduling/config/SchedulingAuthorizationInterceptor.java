@@ -13,6 +13,8 @@ import rw.rra.roomiq.scheduling.integration.SchedulingAuthorizationClient;
 @Component
 public class SchedulingAuthorizationInterceptor implements HandlerInterceptor {
     public static final String ACTOR_USER_ID_ATTRIBUTE = "schedulingAuthenticatedActorUserId";
+    private static final String CONSTRAINT_VALIDATION_PATH = "/api/v1/scheduling-constraints/validate";
+    private static final String AVAILABILITY_SEARCH_PATH = "/api/v1/availability/search";
     private final SchedulingAuthorizationClient authorizationClient;
 
     public SchedulingAuthorizationInterceptor(SchedulingAuthorizationClient authorizationClient) {
@@ -30,8 +32,14 @@ public class SchedulingAuthorizationInterceptor implements HandlerInterceptor {
             throw new DomainException(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED",
                     "Authentication is required");
         }
-        request.setAttribute(ACTOR_USER_ID_ATTRIBUTE, authorizationClient.authorize(authorization,
-            HttpMethod.GET.matches(request.getMethod()) ? "READ" : "MANAGE"));
+        boolean readOnlyOperation = HttpMethod.GET.matches(request.getMethod())
+                || (HttpMethod.POST.matches(request.getMethod())
+                && (CONSTRAINT_VALIDATION_PATH.equals(
+                        request.getRequestURI().substring(request.getContextPath().length()))
+                || AVAILABILITY_SEARCH_PATH.equals(
+                        request.getRequestURI().substring(request.getContextPath().length()))));
+        request.setAttribute(ACTOR_USER_ID_ATTRIBUTE,
+                authorizationClient.authorize(authorization, readOnlyOperation ? "READ" : "MANAGE"));
         return true;
     }
 }

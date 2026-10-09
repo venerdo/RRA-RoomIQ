@@ -25,13 +25,15 @@ public class SchedulingOpenApiConfiguration {
     private static final String CORRELATION_ID = "X-Correlation-ID";
     private static final String API_ERROR_SCHEMA = "#/components/schemas/ApiError";
     private static final Map<String, String> ERROR_RESPONSES = Map.of(
-            "400", "Validation or scheduling rule error, including INVALID_TIMEZONE, INVALID_RRULE, RRULE_END_BOUND_REQUIRED, RECURRENCE_HORIZON_EXCEEDED, and RECURRENCE_OCCURRENCE_LIMIT_EXCEEDED.",
+            "400", "Malformed request or unsupported search bounds, including INVALID_TIMEZONE, INVALID_RRULE, AVAILABILITY_RANGE_TOO_LARGE, AVAILABILITY_RESULT_LIMIT_EXCEEDED, and recurrence-bound errors.",
             "401", "Authentication is required or invalid: AUTHENTICATION_REQUIRED.",
             "403", "The authenticated user is not authorized: ACCESS_DENIED.",
             "404", "A working calendar, window, or recurrence rule was not found.",
             "409", "A calendar or recurrence-rule integrity conflict occurred.",
             "500", "An unexpected error occurred: INTERNAL_ERROR.",
-            "503", "Identity authorization is unavailable: IDENTITY_AUTHORIZATION_UNAVAILABLE.");
+            "503", "Authoritative inputs are unavailable or stale: IDENTITY_AUTHORIZATION_UNAVAILABLE, "
+                    + "ROOM_AVAILABILITY_UNAVAILABLE, BOOKING_OCCUPANCY_UNAVAILABLE, BOOKING_OCCUPANCY_STALE, "
+                    + "and SCHEDULING_DATA_UNAVAILABLE.");
 
     @Bean
     OpenApiCustomizer schedulingApiContractCustomizer() {
@@ -51,7 +53,9 @@ public class SchedulingOpenApiConfiguration {
                 if (path.startsWith("/api/v1/working-calendars")
                     || path.startsWith("/api/v1/holidays")
                     || path.startsWith("/api/v1/closure-periods")
-                    || path.startsWith("/api/v1/recurrence-rules")) {
+                    || path.startsWith("/api/v1/recurrence-rules")
+                    || path.startsWith("/api/v1/scheduling-constraints")
+                    || path.startsWith("/api/v1/availability")) {
                     pathItem.readOperations().forEach(this::documentOperationContract);
                 }
             });

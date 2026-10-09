@@ -20,6 +20,10 @@ server:
 roomiq:
   identity:
     url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+  room:
+    url: ${ROOM_SERVICE_URL:http://localhost:8083}
+  booking:
+    url: ${BOOKING_SERVICE_URL:http://localhost:8085}
 management:
   endpoints:
     web:

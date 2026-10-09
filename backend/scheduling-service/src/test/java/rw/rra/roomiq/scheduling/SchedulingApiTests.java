@@ -24,6 +24,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -62,6 +64,42 @@ class SchedulingApiTests {
     @BeforeEach
     void authorizeSchedulingRequests() {
         when(authorizationClient.authorize(anyString(), anyString())).thenReturn(ACTOR_ID);
+    }
+
+    @Test
+    void workingCalendarApisRequireAuthenticationBeforeReadingOrMutating() throws Exception {
+        mockMvc.perform(get("/api/v1/working-calendars"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+
+        mockMvc.perform(post("/api/v1/working-calendars")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"name":"Unauthenticated calendar","officeBuildingId":null,
+                                 "timezone":"Africa/Kigali","defaultCalendar":false,"active":true}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+
+        verifyNoInteractions(authorizationClient);
+    }
+
+    @Test
+    void workingCalendarReadsAndMutationsDelegateReadAndManageAuthorization() throws Exception {
+        mockMvc.perform(get("/api/v1/working-calendars")
+                        .header("Authorization", "Bearer test-token"))
+                .andExpect(status().isOk());
+        verify(authorizationClient).authorize("Bearer test-token", "READ");
+
+        mockMvc.perform(post("/api/v1/working-calendars")
+                        .header("Authorization", "Bearer test-token")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"name":"Authorized calendar","officeBuildingId":null,
+                                 "timezone":"Africa/Kigali","defaultCalendar":false,"active":true}
+                                """))
+                .andExpect(status().isCreated());
+        verify(authorizationClient).authorize("Bearer test-token", "MANAGE");
     }
 
     @Test
@@ -246,13 +284,15 @@ class SchedulingApiTests {
         String document = mockMvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         Map<?, ?> paths = com.jayway.jsonpath.JsonPath.read(document, "$.paths");
-        assertThat(paths).hasSize(11);
+        assertThat(paths).hasSize(13);
         int operations = 0;
         for (Map.Entry<?, ?> path : paths.entrySet()) {
             String pathName = path.getKey().toString();
             if (pathName.startsWith("/api/v1/working-calendars") || pathName.startsWith("/api/v1/holidays")
                     || pathName.startsWith("/api/v1/closure-periods")
-                    || pathName.startsWith("/api/v1/recurrence-rules")) {
+                    || pathName.startsWith("/api/v1/recurrence-rules")
+                    || pathName.startsWith("/api/v1/scheduling-constraints")
+                    || pathName.startsWith("/api/v1/availability")) {
                 for (Map.Entry<?, ?> operation : ((Map<?, ?>) path.getValue()).entrySet()) {
                     operations++;
                     Map<?, ?> details = (Map<?, ?>) operation.getValue();
@@ -262,7 +302,7 @@ class SchedulingApiTests {
                 }
             }
         }
-        assertThat(operations).isEqualTo(25);
+        assertThat(operations).isEqualTo(27);
     }
 
     private WorkingCalendar createCalendar() {

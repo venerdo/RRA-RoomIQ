@@ -10,5 +10,6 @@ import java.util.UUID;
 
 public interface HolidayRepository extends JpaRepository<Holiday, UUID>, JpaSpecificationExecutor<Holiday> {
     List<Holiday> findAllByHolidayDateAndActiveTrue(LocalDate holidayDate);
+    List<Holiday> findAllByHolidayDateBetweenAndActiveTrueAndBlocksBookingTrue(LocalDate fromDate, LocalDate toDate);
     boolean existsByWorkingCalendar_Id(UUID workingCalendarId);
 }

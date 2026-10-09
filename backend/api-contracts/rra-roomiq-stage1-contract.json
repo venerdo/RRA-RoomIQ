@@ -3,7 +3,7 @@
   "project": "RRA RoomIQ",
   "stage": "Stage 5",
   "status": "stage-5-in-progress",
-  "stageStatusReason": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-04 are complete; S5-05 scheduling-constraint validation is next.",
+  "stageStatusReason": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-07 are implemented and verified; explicit Stage 5 acceptance is pending.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -586,7 +586,7 @@
         "cleanFullReactor": "mvn -f backend/pom.xml clean test passed 25 suites and 69 tests across all 11 reactor projects, zero failures/errors/skips."
       },
       "architectureAndErd": "No unauthorized ERD or service-boundary changes were made; the approved SRS and ERD remain unchanged during S3-11.",
-      "stageAcceptance": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-04 are complete; S5-05 is next."
+      "stageAcceptance": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-07 are implemented and verified; explicit Stage 5 acceptance is pending."
     }
   },
   "stage4Progress": {
@@ -885,8 +885,9 @@
       ],
       "validation": "Calendar timezone must be a valid IANA ZoneId. Calendar list paging defaults to page 0/size 20 and caps size at 100; name sorting is allow-listed. Working-day weekday values are 1-7 and closeTime must be later than openTime. Calendar deletion conflicts while windows or calendar-scoped holidays reference it.",
       "authorization": "Every /api/v1 request forwards the caller bearer token to POST /api/v1/internal/authorization/scheduling. Active users may READ; MANAGE requires current IDENTITY_SYSTEM_ADMIN. Missing credentials, denial, and Identity outages fail closed.",
-      "apiContract": "Nine operations use Scheduling-owned DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID propagation, and bearer-protected OpenAPI documentation.",
-      "verification": "Focused Scheduling/PostgreSQL API and migration tests, Identity authorization/OpenAPI tests, and the full backend Java test gate passed with no reported failures or errors.",
+      "serviceExposure": "All nine operations are served by Scheduling and guarded by the /api/v1/** authorization interceptor. Missing bearer credentials are rejected before controller execution; reads delegate Identity READ and mutations delegate Identity MANAGE. The API Gateway currently has no Scheduling route; Gateway publication is deferred to Stage 11. OpenAPI declares bearer authentication for each operation.",
+      "apiContract": "Nine operations use Scheduling-owned DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID propagation, and per-operation bearer security declarations in OpenAPI.",
+      "verification": "PostgreSQL-backed route tests confirm missing credentials are denied, GET delegates READ, and POST delegates MANAGE. The S5-07 Scheduling suite passed 48 tests; Identity/common-web passed 37 tests; the full backend reactor passed 156 tests, with zero failures, errors, or skips.",
       "requirementsAndErd": "No requirements or ERD change was needed."
     },
     "S5-03": {
@@ -934,15 +935,88 @@
     },
     "S5-05": {
       "name": "Scheduling constraint validation API",
-      "status": "planned"
+      "status": "complete",
+      "basePath": "/api/v1/scheduling-constraints",
+      "operations": [
+        "POST /api/v1/scheduling-constraints/validate"
+      ],
+      "requestAndValidation": "The versioned read-only validation request contains workingCalendarId, officeBuildingId, startsAt and endsAt Instants, the expected IANA timezone, and an optional persisted recurrenceRuleId. The selected calendar must be active and building-compatible, and its timezone must exactly match the request; a supplied recurrence rule must also use that timezone and start on the submitted local start date. Instants are converted in the selected zone. Intervals must be positive and within one local date; recurrence reuses the submitted local start/end times on each bounded RRULE date. Each interval must fit fully inside a working-day window. Applicable active blocksBooking holidays and overlapping building/nationwide blocking half-open closure ranges invalidate the affected occurrence. The existing S5-04 bound limits evaluation to at most 365 dates.",
+      "responseAndFailurePolicy": "Policy conflicts return HTTP 200 with data.valid=false, checked occurrence count, and occurrence-scoped stable violation codes; consumers must proceed only when valid=true. Malformed intervals, invalid or mismatched timezones, invalid recurrence combinations, missing referenced resources, and Identity authorization/dependency failures return errors rather than approval. Nonexistent recurring wall-clock times during timezone gaps are rejected; ambiguous repeated local times resolve deterministically using the zone's first valid offset.",
+      "authorization": "The validation POST delegates to Identity using READ because it does not mutate state. Identity outages and authorization failures fail closed. Existing mutation endpoints retain their MANAGE authorization policy.",
+      "apiContract": "One versioned POST operation uses Scheduling-owned request/response DTOs, the shared ApiResponse/ApiError envelopes, request correlation, and protected OpenAPI documentation. Scheduling does not call Booking or Room and does not mutate reservations or occupancy.",
+      "verification": "SchedulingConstraintApiTests passed all 8 PostgreSQL Testcontainers API tests. The Scheduling suite passed 28 tests, Identity passed 37 tests, and common-web passed 6 tests. The full 11-module backend reactor passed all 136 tests with zero failures, errors, or skips.",
+      "requirementsAndErd": "No migration, requirements specification, or approved ERD change was required."
     },
     "S5-06": {
       "name": "Availability calculation and owner-service integration",
-      "status": "planned"
+      "status": "complete",
+      "basePath": "/api/v1/availability",
+      "operations": [
+        "POST /api/v1/availability/search"
+      ],
+      "request": {
+        "required": ["workingCalendarId", "officeBuildingId", "startsAt", "endsAt"],
+        "optional": ["minimumCapacity", "minimumDurationMinutes", "facilityTypeIds", "departmentId", "recurrenceRuleId"],
+        "timeRange": "startsAt and endsAt are absolute Instants and define a positive half-open range of no more than 31 days.",
+        "limits": "facilityTypeIds contains at most 25 non-null IDs; candidate output is limited to 5000 windows. Exceeding a limit returns an explicit error and never partial results."
+      },
+      "response": {
+        "fields": ["workingCalendarId", "officeBuildingId", "timezone", "searchedAt", "occupancySnapshotAt", "bookingOccupancyIncluded", "bookingConfirmationRequired", "windows"],
+        "windowFields": ["roomId", "roomName", "roomCode", "capacity", "occurrenceDate", "startsAt", "endsAt", "minimumDurationMinutes", "maximumDurationMinutes", "recurrenceRuleId"],
+        "semantics": "Windows are continuous candidate intervals with explicit Instant boundaries and a local occurrence date. They are not reservation confirmations. For recurrence, each window describes an individual RRULE occurrence; the API does not promise one common interval across the full series."
+      },
+      "authorization": "The public POST route requires a bearer token and delegates read authorization to Identity. The caller's bearer token is forwarded to Room and Booking owner APIs. The internal Booking occupancy endpoint is protected and must not be exposed through the API Gateway.",
+      "roomOwnerIntegration": {
+        "source": "Room Service owner APIs only; Scheduling performs no Room database access.",
+        "operations": ["GET /api/v1/rooms?officeBuildingId={buildingId}&status=AVAILABLE", "GET /api/v1/rooms/{roomId}/rules", "GET /api/v1/office-buildings/{officeBuildingId}/room-rules", "GET /api/v1/rooms/{roomId}/facilities", "GET /api/v1/rooms/{roomId}/maintenance-periods"],
+        "policy": "Room status, effective room-specific/building rules, WORKING facility assignments, and finite maintenance ranges are checked. Invalid, incomplete, unauthorized, or unavailable authoritative Room responses fail closed."
+      },
+      "bookingOccupancyApiContract": {
+        "operation": "POST /api/v1/internal/availability/occupancy",
+        "contractVersion": "v1",
+        "request": {
+          "fields": ["roomIds", "startsAt", "endsAt", "contractVersion"],
+          "contractVersionValue": "v1",
+          "timeRange": "Absolute Instants for the requested half-open range."
+        },
+        "response": {
+          "envelope": "Shared ApiResponse",
+          "dataFields": ["snapshotAt", "rooms"],
+          "roomFields": ["roomId", "intervals"],
+          "intervalFields": ["startsAt", "endsAt"],
+          "completeness": "Every requested room must appear exactly once, even when it has no occupied intervals. Occupied intervals must be finite and half-open."
+        },
+        "freshnessSecondsMaximum": 30,
+        "intervalOwnership": "Booking returns its authoritative occupied intervals inclusive of its configured release buffer; Scheduling does not add a buffer.",
+        "failurePolicy": "Missing, unavailable, unauthorized, malformed, incomplete, or stale snapshots fail closed. No missing/failed response may be interpreted as zero occupancy. Until S6 implements the Booking provider, candidate-producing searches return 503 BOOKING_OCCUPANCY_UNAVAILABLE.",
+        "timeouts": {"connectSeconds": 2, "readSeconds": 5}
+      },
+      "bookingOccupancyEventContract": {
+        "status": "Defined for future Booking outbox publication; no event consumer or cached occupancy state is implemented in S5-06.",
+        "eventVersion": "v1",
+        "eventType": "booking.occupancy.changed",
+        "fields": ["eventId", "eventVersion", "reservationId", "roomId", "action", "reservationVersion", "occurredAt", "occupiedInterval"],
+        "actions": ["UPSERT", "REMOVE"],
+        "occupiedInterval": "For UPSERT, the finite half-open interval includes Booking's release buffer. REMOVE identifies the reservation and room with no active occupied interval.",
+        "deliverySemantics": "Booking publishes after transaction commit from its outbox. eventId supports deduplication; reservationVersion increases monotonically per reservation so consumers can ignore stale/out-of-order updates. Events are notifications/invalidation only and never replace the synchronous authoritative occupancy snapshot."
+      },
+      "emptyAndRecurringResults": "If no preliminary candidate windows exist, the API may return an empty list without calling Booking and sets bookingOccupancyIncluded=false. Candidate-producing searches require successful occupancy inclusion and otherwise fail closed. Recurring results are occurrence-level only; Booking must validate the full series before confirmation.",
+      "apiContract": "Scheduling-owned validated request/response DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID, protected OpenAPI. The API is read-only and writes no Room maintenance or Booking occupancy.",
+      "verification": "Availability calculation covers calendar windows, policy boundaries, maintenance, closures, holidays, working facilities, current occupancy subtraction, recurrence occurrence filtering, timezone/DST handling, dependency failures, and stale/partial occupancy. Focused availability/API/client tests passed 33, the complete Scheduling suite passed 46, Identity/common-web passed 37, and the full 11-module backend reactor passed 154 tests, all with zero failures, errors, or skips.",
+      "requirementsAndErd": "No schema migration, SRS, requirements specification, or approved ERD change was required."
     },
     "S5-07": {
       "name": "Stage 5 regression and documentation gate",
-      "status": "planned"
+      "status": "complete",
+      "verification": {
+        "focusedSchedulingPostgreSQL": {"passed": 48, "failed": 0, "errors": 0, "skipped": 0},
+        "identityAndCommonWeb": {"passed": 37, "failed": 0, "errors": 0, "skipped": 0},
+        "fullBackendReactor": {"modules": 11, "passed": 156, "failed": 0, "errors": 0, "skipped": 0},
+        "coverage": ["migration", "repository", "domain", "API", "authorization", "timezone", "holiday", "closure", "recurrence", "availability", "OpenAPI"]
+      },
+      "documentation": "Backend roadmap, service README, API contract, and architecture/readme references are synchronized through S5-07.",
+      "requirementsAndErd": "No requirements, SRS, ERD, or migration change was required.",
+      "stageAcceptance": "Verification complete; explicit user acceptance is pending. Booking's concurrent reservation exclusion/locking tests remain an S6 acceptance requirement."
     }
   },
   "authorizationPolicyDocumentation": "identity-service/AUTHORIZATION.md",

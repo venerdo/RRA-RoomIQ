@@ -22,6 +22,11 @@ public record BookingAuthorizationRequest(
                     && resourceOwnerUserId == null && vipRoom == null;
             case REQUEST_CREATE -> buildingId != null && departmentId != null && vipRoom != null
                     && resourceOwnerUserId == null;
+            case REQUEST_SUBMIT -> buildingId != null && departmentId != null && vipRoom != null
+                    && resourceOwnerUserId != null;
+            case REQUEST_LIST -> departmentId == null && resourceOwnerUserId == null && vipRoom == null;
+            case REQUEST_READ -> buildingId != null && resourceOwnerUserId != null
+                    && departmentId == null && vipRoom == null;
             case DIRECT_CREATE -> buildingId != null && departmentId == null
                     && resourceOwnerUserId == null && vipRoom == null;
             case APPROVE, CANCEL, EXTENSION_REQUEST, EXTENSION_DECIDE ->
@@ -33,6 +38,9 @@ public record BookingAuthorizationRequest(
     public enum Action {
         AUTHENTICATE,
         REQUEST_CREATE,
+        REQUEST_SUBMIT,
+        REQUEST_LIST,
+        REQUEST_READ,
         DIRECT_CREATE,
         APPROVE,
         CANCEL,

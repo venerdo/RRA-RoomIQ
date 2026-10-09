@@ -41,6 +41,12 @@ public class OrganizationAuthorizationController {
             case AUTHENTICATE -> authorization.canAuthenticateBooking(authentication);
             case REQUEST_CREATE -> authorization.canRequestBooking(authentication,
                     request.departmentId(), request.buildingId(), Boolean.TRUE.equals(request.vipRoom()));
+            case REQUEST_SUBMIT -> authorization.canSubmitBookingRequest(authentication,
+                    request.resourceOwnerUserId(), request.departmentId(), request.buildingId(),
+                    Boolean.TRUE.equals(request.vipRoom()));
+            case REQUEST_LIST -> authorization.canListBookingRequests(authentication, request.buildingId());
+            case REQUEST_READ -> authorization.canReadBookingRequest(authentication,
+                    request.resourceOwnerUserId(), request.buildingId());
             case DIRECT_CREATE -> authorization.canDirectBook(authentication, request.buildingId());
             case APPROVE -> authorization.canApproveBooking(authentication,
                     request.resourceOwnerUserId(), request.buildingId());

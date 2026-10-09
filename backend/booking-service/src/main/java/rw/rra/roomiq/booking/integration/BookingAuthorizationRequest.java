@@ -12,6 +12,9 @@ public record BookingAuthorizationRequest(
     public enum Action {
         AUTHENTICATE,
         REQUEST_CREATE,
+        REQUEST_SUBMIT,
+        REQUEST_LIST,
+        REQUEST_READ,
         DIRECT_CREATE,
         APPROVE,
         CANCEL,

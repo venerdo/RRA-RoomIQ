@@ -112,4 +112,12 @@ public class BookingRequest extends BookingEntity {
     public String getIdempotencyKey() { return idempotencyKey; }
     public int getVersion() { return version; }
     public Instant getCreatedAt() { return createdAt; }
+
+    public boolean submitForApproval() {
+        if (status != BookingRequestStatus.DRAFT) {
+            return false;
+        }
+        status = BookingRequestStatus.PENDING_APPROVAL;
+        return true;
+    }
 }

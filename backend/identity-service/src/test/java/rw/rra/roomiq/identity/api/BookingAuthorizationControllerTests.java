@@ -116,6 +116,76 @@ class BookingAuthorizationControllerTests {
     }
 
     @Test
+    void requestListAndReadDecisionsEnforceRequesterAndReviewerBuildingScope() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID otherBuildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser requester = createUser("requester-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        AppUser reviewer = createUser("reviewer-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, buildingId);
+        AppUser outOfScopeReviewer = createUser("out-of-scope-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, otherBuildingId);
+        Role requesterRole = createRoleWithPermissions("REQUESTER", "BOOKING_REQUEST_CREATE");
+        Role reviewerRole = createRoleWithPermissions("REQUEST_REVIEWER", "BOOKING_APPROVE");
+        userRoles.saveAndFlush(new UserRole(requester, requesterRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(reviewer, reviewerRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(outOfScopeReviewer, reviewerRole, otherBuildingId, null));
+
+        String requesterId = requester.getId().toString();
+        String reviewerId = reviewer.getId().toString();
+
+        mockMvc.perform(bookingRequestList(requesterId, null))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actorUserId").value(requesterId));
+        mockMvc.perform(bookingRequestList(requesterId, buildingId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(bookingRequestList(reviewerId, buildingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actorUserId").value(reviewerId));
+        mockMvc.perform(bookingRequestRead(requesterId, requester.getId(), buildingId))
+                .andExpect(status().isOk());
+        mockMvc.perform(bookingRequestRead(reviewerId, requester.getId(), buildingId))
+                .andExpect(status().isOk());
+        mockMvc.perform(bookingRequestRead(outOfScopeReviewer.getId().toString(), requester.getId(), buildingId))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void directBookingPermissionDoesNotGrantBookingRequestCreation() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser directBooker = createUser("direct-booker-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        Role directBookingRole = createRoleWithPermissions("DIRECT_BOOKER", "BOOKING_DIRECT_CREATE");
+        userRoles.saveAndFlush(new UserRole(directBooker, directBookingRole, buildingId, null));
+
+        mockMvc.perform(bookingRequest(directBooker.getId().toString(), departmentId, buildingId, false))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void onlyTheRequestingActiveUserCanSubmitTheirDraft() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser requester = createUser("draft-owner-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        AppUser colleague = createUser("draft-colleague-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        Role requesterRole = createRoleWithPermissions("DRAFT_REQUESTER", "BOOKING_REQUEST_CREATE");
+        userRoles.saveAndFlush(new UserRole(requester, requesterRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(colleague, requesterRole, buildingId, null));
+
+        mockMvc.perform(bookingRequestSubmit(requester.getId().toString(), requester.getId(),
+                        departmentId, buildingId, false))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actorUserId").value(requester.getId().toString()));
+        mockMvc.perform(bookingRequestSubmit(colleague.getId().toString(), requester.getId(),
+                        departmentId, buildingId, false))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void approvalRequiresScopedPermissionAndCannotApproveOwnRequest() throws Exception {
         UUID buildingId = UUID.randomUUID();
         UUID otherBuildingId = UUID.randomUUID();
@@ -176,6 +246,36 @@ class BookingAuthorizationControllerTests {
                         """.formatted(action, resourceOwnerUserId, buildingId));
     }
 
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder bookingRequestList(
+            String tokenSubject, UUID buildingId) {
+        String building = buildingId == null ? "" : ",\"buildingId\":\"" + buildingId + "\"";
+        return post(AUTHORIZATION_PATH)
+                .with(jwt().jwt(token -> token.subject(tokenSubject)))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"action\":\"REQUEST_LIST\"" + building + "}");
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder bookingRequestSubmit(
+            String tokenSubject, UUID requesterUserId, UUID departmentId, UUID buildingId, boolean vipRoom) {
+        return post(AUTHORIZATION_PATH)
+                .with(jwt().jwt(token -> token.subject(tokenSubject)))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"action":"REQUEST_SUBMIT","resourceOwnerUserId":"%s","departmentId":"%s",
+                         "buildingId":"%s","vipRoom":%s}
+                        """.formatted(requesterUserId, departmentId, buildingId, vipRoom));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder bookingRequestRead(
+            String tokenSubject, UUID requesterUserId, UUID buildingId) {
+        return post(AUTHORIZATION_PATH)
+                .with(jwt().jwt(token -> token.subject(tokenSubject)))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"action":"REQUEST_READ","resourceOwnerUserId":"%s","buildingId":"%s"}
+                        """.formatted(requesterUserId, buildingId));
+    }
+
     private AppUser createUser(String email, UserStatus status, UUID departmentId, UUID buildingId) {
         AppUser user = new AppUser(email, "Booking Authorization Test", status);
         user.updateProfile(null, null, null, null, null, departmentId, buildingId);
@@ -185,7 +285,8 @@ class BookingAuthorizationControllerTests {
     private Role createRoleWithPermissions(String roleCode, String... permissionCodes) {
         Role role = roles.saveAndFlush(new Role(roleCode, roleCode, true));
         List.of(permissionCodes).forEach(code -> {
-            Permission permission = permissions.saveAndFlush(new Permission(code, code));
+            Permission permission = permissions.findByCodeIgnoreCase(code)
+                    .orElseGet(() -> permissions.saveAndFlush(new Permission(code, code)));
             rolePermissions.saveAndFlush(new RolePermission(role, permission));
         });
         return role;

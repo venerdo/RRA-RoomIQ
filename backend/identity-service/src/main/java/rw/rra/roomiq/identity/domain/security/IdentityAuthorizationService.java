@@ -345,17 +345,17 @@ public class IdentityAuthorizationService {
         if (actorId == null || !actorId.equals(requestedByUserId) || buildingId == null || !isActive(actorId)) {
             return false;
         }
-        if (hasGlobalPermission(authentication, actorId)
-                || hasPermission(authentication, actorId, BOOKING_DIRECT_CREATE, buildingId)) {
-            return true;
-        }
         AppUser user = users.findById(actorId).orElse(null);
         if (user == null || !buildingId.equals(user.getOfficeBuildingId())
-                || departmentId == null || !departmentId.equals(user.getDepartmentId())
-                || !hasPermission(authentication, actorId, BOOKING_REQUEST_CREATE, buildingId)) {
+                || departmentId == null || !departmentId.equals(user.getDepartmentId())) {
             return false;
         }
-        return !vipRoom || hasActivePrivilege(actorId, "CG_BOOKING", at == null ? Instant.now() : at);
+        boolean globallyAuthorized = hasGlobalPermission(authentication, actorId);
+        if (!globallyAuthorized && !hasPermission(authentication, actorId, BOOKING_REQUEST_CREATE, buildingId)) {
+            return false;
+        }
+        return !vipRoom || globallyAuthorized
+                || hasActivePrivilege(actorId, "CG_BOOKING", at == null ? Instant.now() : at);
     }
 
     public boolean canAuthenticateBooking(Authentication authentication) {
@@ -363,11 +363,54 @@ public class IdentityAuthorizationService {
         return actorId != null && isActive(actorId);
     }
 
+    public boolean canListBookingRequests(Authentication authentication, UUID buildingId) {
+        UUID actorId = actorId(authentication);
+        if (actorId == null || !isActive(actorId)) {
+            return false;
+        }
+        if (buildingId != null) {
+            return hasGlobalPermission(authentication, actorId)
+                    || hasPermission(authentication, actorId, BOOKING_APPROVE, buildingId);
+        }
+        AppUser user = users.findById(actorId).orElse(null);
+        if (user == null || user.getOfficeBuildingId() == null) {
+            return false;
+        }
+        return hasGlobalPermission(authentication, actorId)
+                || hasPermission(authentication, actorId, BOOKING_REQUEST_CREATE, user.getOfficeBuildingId())
+                || hasPermission(authentication, actorId, BOOKING_DIRECT_CREATE, user.getOfficeBuildingId());
+    }
+
+    public boolean canReadBookingRequest(Authentication authentication, UUID requesterUserId, UUID buildingId) {
+        UUID actorId = actorId(authentication);
+        if (actorId == null || !isActive(actorId) || requesterUserId == null || buildingId == null) {
+            return false;
+        }
+        if (hasGlobalPermission(authentication, actorId)) {
+            return true;
+        }
+        if (actorId.equals(requesterUserId)) {
+            AppUser user = users.findById(actorId).orElse(null);
+            return user != null && buildingId.equals(user.getOfficeBuildingId())
+                    && (hasPermission(authentication, actorId, BOOKING_REQUEST_CREATE, buildingId)
+                    || hasPermission(authentication, actorId, BOOKING_DIRECT_CREATE, buildingId));
+        }
+        return hasPermission(authentication, actorId, BOOKING_APPROVE, buildingId);
+    }
+
     public boolean canRequestBooking(Authentication authentication, UUID departmentId,
                                      UUID buildingId, boolean vipRoom) {
         UUID actorId = actorId(authentication);
         return actorId != null && canRequestBooking(authentication, actorId,
                 departmentId, buildingId, vipRoom, Instant.now());
+    }
+
+    public boolean canSubmitBookingRequest(Authentication authentication, UUID requesterUserId,
+                                           UUID departmentId, UUID buildingId, boolean vipRoom) {
+        UUID actorId = actorId(authentication);
+        return actorId != null && actorId.equals(requesterUserId)
+                && canRequestBooking(authentication, requesterUserId, departmentId, buildingId,
+                vipRoom, Instant.now());
     }
 
     public boolean canApproveBooking(Authentication authentication, UUID requesterUserId, UUID buildingId) {

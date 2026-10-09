@@ -113,13 +113,16 @@ class BookingServiceApplicationTests {
     }
 
     @Test
-    void noBookingBusinessApiRoutesAreExposedBeforeTheirApprovedRequirements() {
+    void onlyApprovedBookingRequestApiRoutesAreExposedAndOtherBusinessRoutesRemainUnavailable() {
         Set<String> apiRoutes = handlerMapping.getHandlerMethods().keySet().stream()
                 .flatMap(mapping -> mapping.getPatternValues().stream())
                 .filter(path -> path.startsWith("/api/v1/"))
                 .collect(Collectors.toSet());
 
-        assertThat(apiRoutes).isEmpty();
+        assertThat(apiRoutes).containsExactlyInAnyOrder(
+                "/api/v1/booking-requests",
+                "/api/v1/booking-requests/{id}/submit",
+                "/api/v1/booking-requests/{id}");
     }
 
     @Test

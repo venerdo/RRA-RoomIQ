@@ -72,6 +72,11 @@ class SchedulingApiTests {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
 
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .options("/api/v1/working-calendars"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+
         mockMvc.perform(post("/api/v1/working-calendars")
                         .contentType(APPLICATION_JSON)
                         .content("""

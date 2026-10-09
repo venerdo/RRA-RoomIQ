@@ -23,9 +23,6 @@ public class SchedulingAuthorizationInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        if (HttpMethod.OPTIONS.matches(request.getMethod())) {
-            return true;
-        }
         String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (authorization == null || !authorization.regionMatches(true, 0, "Bearer ", 0, 7)
                 || authorization.substring(7).isBlank()) {
@@ -33,6 +30,7 @@ public class SchedulingAuthorizationInterceptor implements HandlerInterceptor {
                     "Authentication is required");
         }
         boolean readOnlyOperation = HttpMethod.GET.matches(request.getMethod())
+                || HttpMethod.OPTIONS.matches(request.getMethod())
                 || (HttpMethod.POST.matches(request.getMethod())
                 && (CONSTRAINT_VALIDATION_PATH.equals(
                         request.getRequestURI().substring(request.getContextPath().length()))

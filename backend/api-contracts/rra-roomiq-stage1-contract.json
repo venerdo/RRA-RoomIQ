@@ -884,8 +884,8 @@
         "DELETE /api/v1/working-calendars/{calendarId}/working-day-windows/{windowId}"
       ],
       "validation": "Calendar timezone must be a valid IANA ZoneId. Calendar list paging defaults to page 0/size 20 and caps size at 100; name sorting is allow-listed. Working-day weekday values are 1-7 and closeTime must be later than openTime. Calendar deletion conflicts while windows or calendar-scoped holidays reference it.",
-      "authorization": "Every /api/v1 request forwards the caller bearer token to POST /api/v1/internal/authorization/scheduling. Active users may READ; MANAGE requires current IDENTITY_SYSTEM_ADMIN. Missing credentials, denial, and Identity outages fail closed.",
-      "serviceExposure": "All nine operations are served by Scheduling and guarded by the /api/v1/** authorization interceptor. Missing bearer credentials are rejected before controller execution; reads delegate Identity READ and mutations delegate Identity MANAGE. The API Gateway currently has no Scheduling route; Gateway publication is deferred to Stage 11. OpenAPI declares bearer authentication for each operation.",
+      "authorization": "Every /api/v1 request, including OPTIONS, forwards the caller bearer token to POST /api/v1/internal/authorization/scheduling. Active users may READ; MANAGE requires current IDENTITY_SYSTEM_ADMIN. Missing credentials, denial, inactive users, and Identity outages fail closed. The actor is derived from the authenticated token; request-supplied actor, role, permission, and scope are not accepted.",
+      "serviceExposure": "All nine operations are served by Scheduling and guarded by the /api/v1/** authorization interceptor. Missing bearer credentials are rejected before controller execution; reads and OPTIONS delegate Identity READ, while mutations and unsupported methods delegate Identity MANAGE. The API Gateway currently has no Scheduling route; Gateway publication is deferred to Stage 11. These are authenticated service routes, not public/Gateway routes. OpenAPI declares bearer authentication for each operation but does not publish the routes. The repository has no deployment ingress policy; production must restrict direct service and OpenAPI access to a private/trusted network.",
       "apiContract": "Nine operations use Scheduling-owned DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID propagation, and per-operation bearer security declarations in OpenAPI.",
       "verification": "PostgreSQL-backed route tests confirm missing credentials are denied, GET delegates READ, and POST delegates MANAGE. The S5-07 Scheduling suite passed 48 tests; Identity/common-web passed 37 tests; the full backend reactor passed 156 tests, with zero failures, errors, or skips.",
       "requirementsAndErd": "No requirements or ERD change was needed."
@@ -1018,6 +1018,14 @@
       "requirementsAndErd": "No requirements, SRS, ERD, or migration change was required.",
       "stageAcceptance": "Verification complete; explicit user acceptance is pending. Booking's concurrent reservation exclusion/locking tests remain an S6 acceptance requirement."
     }
+  },
+  "schedulingApiExposurePolicy": {
+    "businessRoutes": "/api/v1/**",
+    "serverSideEnforcement": "Every request, including OPTIONS, requires a bearer token and a successful Identity authorization decision before controller handling.",
+    "callerIdentity": "Authenticated user identity and current active/permission state are resolved by Identity from the forwarded Identity-issued bearer token; Scheduling does not accept caller-supplied actor IDs, roles, permissions, or scope.",
+    "serviceToService": "Authorized upstream services propagate the caller bearer token. No separate machine-to-machine identity credential is implemented in Stage 5.",
+    "gateway": "No Scheduling route is configured on the API Gateway in Stage 5; routing/publication is deferred to Stage 11.",
+    "networkBoundary": "Direct access is available only to callers that can reach the service and pass Identity authorization. The repository contains no production ingress policy; deployment must restrict Scheduling and its OpenAPI surfaces to a private/trusted network."
   },
   "authorizationPolicyDocumentation": "identity-service/AUTHORIZATION.md",
   "authorization": {

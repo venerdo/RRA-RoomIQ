@@ -175,7 +175,7 @@ The clean identity/common-web verification passed 12 Surefire suites and 37 test
 
 ### S5-02 Scheduling authorization
 
-`POST /api/v1/internal/authorization/scheduling` is bearer-protected. Active users may read calendars, working windows, holidays, closure periods, and recurrence rules; `MANAGE` requires the current global `IDENTITY_SYSTEM_ADMIN` permission. Its response includes the authenticated `actorUserId`, which Scheduling uses for creator attribution. Scheduling forwards the original bearer token and fails closed if Identity is unavailable. The endpoint accepts only the requested action, not client-supplied identity, role, scope, or permission claims. The Identity API inventory is now 26 OpenAPI operations.
+`POST /api/v1/internal/authorization/scheduling` is bearer-protected. Active users may read calendars, working windows, holidays, closure periods, recurrence rules, constraints, and availability; `MANAGE` requires the current global `IDENTITY_SYSTEM_ADMIN` permission. Its response includes the authenticated `actorUserId`, which Scheduling uses for creator attribution. Scheduling forwards the original Identity-issued bearer token and fails closed if Identity is unavailable. The endpoint accepts only the requested action, not client-supplied identity, role, scope, or permission claims. It authorizes the token's user; it is not a separate machine/service-identity credential. Scheduling's business routes are not Gateway-routed in Stage 5. The Identity API inventory is now 26 OpenAPI operations.
 
 ### S3-08 Organization reference ownership
 

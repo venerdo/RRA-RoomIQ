@@ -12,6 +12,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class SchedulingAuthorizationInterceptorTests {
@@ -37,6 +38,27 @@ class SchedulingAuthorizationInterceptorTests {
         assertThatThrownBy(() -> interceptor.preHandle(request, response, new Object()))
                 .isInstanceOf(DomainException.class)
                 .hasMessage("Authentication is required");
+    }
+
+    @Test
+    void optionsRequestsRequireAuthenticationBeforeDelegation() {
+        HttpServletRequest request = request("OPTIONS", "/api/v1/working-calendars", null);
+
+        assertThatThrownBy(() -> interceptor.preHandle(request, response, new Object()))
+                .isInstanceOf(DomainException.class)
+                .hasMessage("Authentication is required");
+
+        verifyNoInteractions(authorizationClient);
+    }
+
+    @Test
+    void optionsRequestsUseReadAuthorization() {
+        HttpServletRequest request = request("OPTIONS", "/api/v1/working-calendars", "Bearer test-token");
+        when(authorizationClient.authorize("Bearer test-token", "READ")).thenReturn(UUID.randomUUID());
+
+        interceptor.preHandle(request, response, new Object());
+
+        verify(authorizationClient).authorize("Bearer test-token", "READ");
     }
 
     private HttpServletRequest request(String method, String path, String authorization) {

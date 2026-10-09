@@ -99,6 +99,17 @@ class OrganizationAuthorizationControllerTests {
     }
 
     @Test
+    void inactiveUsersCannotReadScheduling() throws Exception {
+        AppUser user = createUser("scheduling-inactive@rra.rw", UserStatus.SUSPENDED);
+
+        mockMvc.perform(post(SCHEDULING_AUTHORIZATION_PATH)
+                        .with(jwt().jwt(token -> token.subject(user.getId().toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"action\":\"READ\"}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void systemAdministratorCanManageScheduling() throws Exception {
         AppUser user = createUser("scheduling-admin@rra.rw", UserStatus.ACTIVE);
 

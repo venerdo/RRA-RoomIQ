@@ -19,11 +19,15 @@ import rw.rra.roomiq.booking.domain.repository.BookingRequestRepository;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationRequest;
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient;
+import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.SchedulingOccurrence;
 import rw.rra.roomiq.common.web.DomainException;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -63,7 +67,10 @@ class BookingRequestServiceTests {
         departmentId = UUID.randomUUID();
         roomId = UUID.randomUUID();
         references = new BookingOwnerServicesClient.ValidatedBookingReferences(
-                buildingId, departmentId, roomId, false, "Africa/Kigali", false, 5);
+                buildingId, departmentId, roomId, false, "Africa/Kigali", false, 5,
+                List.of(new SchedulingOccurrence(
+                        request().requestedStart().atZone(ZoneId.of("Africa/Kigali")).toLocalDate(),
+                        request().requestedStart(), request().requestedEnd())));
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Authorization", TOKEN);
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));

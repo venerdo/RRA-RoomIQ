@@ -73,7 +73,14 @@ public class BookingDecisionService {
                         "Booking request was not found"));
         BookingAuthorizationResponse authorization = authorizationClient.authorizeApproval(
                 bookingRequest.getRequestedByUserId(), bookingRequest.getOfficeBuildingId());
-        UUID actor = authorization.actorUserId();
+        UUID actor = authorization == null ? null : authorization.actorUserId();
+        if (actor == null
+                || !bookingRequest.getRequestedByUserId().equals(authorization.resourceOwnerUserId())
+                || authorization.resourceOwnerDisplayName() == null
+                || authorization.resourceOwnerDisplayName().isBlank()) {
+            throw new DomainException(HttpStatus.UNPROCESSABLE_CONTENT, "BOOKING_REQUESTER_IDENTITY_INVALID",
+                    "The current requester identity is unavailable or inconsistent");
+        }
         if (actor.equals(bookingRequest.getRequestedByUserId())) {
             throw new DomainException(HttpStatus.FORBIDDEN, "BOOKING_SELF_APPROVAL_DENIED",
                     "A requester cannot decide their own booking request");

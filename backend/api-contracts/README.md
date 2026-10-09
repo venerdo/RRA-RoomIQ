@@ -4,7 +4,7 @@ This folder stores backend API contract definitions and sample request payloads 
 
 ## Files
 
-- `rra-roomiq-stage1-contract.json` — shared foundation/API contract, accepted Stage 2 through Stage 5 progress, approved Stage 6 checklist status, and protected Booking request/decision API operations
+- `rra-roomiq-stage1-contract.json` — shared foundation/API contract, accepted Stage 2 through Stage 5 progress, approved Stage 6 checklist status, and protected Booking request/decision/direct-booking API operations
 - `rra-roomiq-identity-postman-collection.json` — importable Postman collection with safe sample payloads, variables, and the authenticated identity flows for users, roles, permissions, privileges, and auth endpoints
 - `rra-roomiq-room-postman-collection.json` — importable Room collection with all 31 documented Room operations, bearer-token inheritance, correlation IDs, safe variables, and representative requests
 - `validate-room-postman-collection.mjs` — route inventory, variable, bearer, correlation, multipart upload, and secret-marker validator for the Room collection

@@ -1045,7 +1045,7 @@
       "S6-02": "complete",
       "S6-03": "complete",
       "S6-04": "complete",
-      "S6-05": "not-started",
+      "S6-05": "in-progress",
       "S6-06": "not-started",
       "S6-07": "not-started",
       "S6-08": "not-started",
@@ -1060,6 +1060,7 @@
       "booking_request",
       "approval_decision",
       "reservation",
+      "reservation_occurrence",
       "meeting",
       "meeting_participant",
       "meeting_share_link",
@@ -1106,7 +1107,7 @@
       }
     },
     "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
-    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, and POST /api/v1/booking-requests/{id}/decision. S6-02 through S6-04 authorization and request/decision workflows are implemented. Cancellation, extension, share-link, occupancy-provider, and Gateway routes are not exposed.",
+    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, and POST /api/v1/bookings/direct. Every operation requires bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The direct flow uses the approved reservation_occurrence model and is pending final regression verification. Cancellation, extension, share-link, and occupancy-provider routes are not exposed.",
     "decisionOperation": {
       "method": "POST",
       "path": "/api/v1/booking-requests/{id}/decision",
@@ -1144,7 +1145,65 @@
         "ROOM_BOOKING_POLICY_UNAVAILABLE"
       ]
     },
-    "erdOrRequirementsChanges": "None."
+    "directBookingOperation": {
+      "method": "POST",
+      "path": "/api/v1/bookings/direct",
+      "authentication": "Bearer token required; Identity authenticates the active account and derives its direct-booking authority, current scope, permissions, and VIP privilege. Booking validates authoritative Organization, Room, and Scheduling data with caller-token propagation. No Gateway route is configured.",
+      "request": {
+        "requiredFields": [
+          "departmentId",
+          "roomId",
+          "officeBuildingId",
+          "title",
+          "requestedStart",
+          "requestedEnd",
+          "attendeeCount"
+        ],
+        "optionalFields": [
+          "recurrenceRuleId",
+          "purpose",
+          "externalGuests"
+        ],
+        "optionalHeader": "Idempotency-Key",
+        "serverDerivedFields": [
+          "requester identity",
+          "request type",
+          "request status",
+          "approval result",
+          "room approval policy",
+          "room class and VIP authorization"
+        ]
+      },
+      "successResponse": {
+        "httpStatus": 201,
+        "envelope": "ApiResponse<DirectBookingResponse>",
+        "dataFields": [
+          "bookingRequestId",
+          "requestReference",
+          "requestType",
+          "status",
+          "reservationId",
+          "meetingId",
+          "occurrenceCount"
+        ],
+        "approvalRequired": "If the current active Room Rule has approvalRequired=true, every initiator receives a PENDING_APPROVAL request with null reservationId and meetingId. No reservation or meeting is created until a different authorized approver completes the existing decision workflow.",
+        "immediateConfirmation": "When approvalRequired=false, Booking revalidates current owner-service inputs and atomically creates the confirmed series reservation, every validated buffered occurrence, a private meeting, and the Identity-derived requester as organizer."
+      },
+      "approvalPolicy": "The active Room Rule applies consistently to Admin, Super Admin, and eligible Secretary initiators. Self-approval remains denied for every role. Secretary Normal/VIP eligibility is evaluated by Identity from current permissions, department/building scope, and active CG_BOOKING privilege; room class is read from Room, never trusted from the caller.",
+      "recurrenceAndConcurrency": "Scheduling supplies bounded, ordered occurrence Instants in the selected IANA timezone after evaluating date/count limits and timezone transitions. Booking rejects incomplete/inconsistent sets, applies the configured release buffer to each half-open interval, persists occurrence rows atomically, and relies on the PostgreSQL GiST exclusion constraint as the concurrent room-conflict barrier. Any occurrence conflict rolls back the complete series.",
+      "stableErrors": [
+        "ACCESS_DENIED",
+        "AUTHENTICATION_REQUIRED",
+        "BOOKING_OWNER_DATA_INCONSISTENT",
+        "BOOKING_REQUEST_INVALID",
+        "BOOKING_SELF_APPROVAL_DENIED",
+        "IDEMPOTENCY_KEY_CONFLICT",
+        "IDENTITY_AUTHORIZATION_INCONSISTENT",
+        "ROOM_OCCUPANCY_CONFLICT",
+        "SCHEDULING_CONSTRAINTS_INVALID"
+      ]
+    },
+    "erdOrRequirementsChanges": "The user explicitly approved the reservation_occurrence table extension in RRA_RoomIQ_ERD_v2.mmd and Booking Flyway V2 before implementation. No further ERD or SRS changes have been made."
   },
   "schedulingApiExposurePolicy": {
     "businessRoutes": "/api/v1/**",
@@ -1160,14 +1219,15 @@
       "GET /api/v1/booking-requests",
       "GET /api/v1/booking-requests/{id}",
       "POST /api/v1/booking-requests/{id}/submit",
-      "POST /api/v1/booking-requests/{id}/decision"
+      "POST /api/v1/booking-requests/{id}/decision",
+      "POST /api/v1/bookings/direct"
     ],
-    "authenticationAndAuthorization": "Every route requires a bearer token and current Identity authorization. Create and submit additionally require current requester permission, department/building scope, and VIP privilege when applicable; list/get enforce requester or scoped reviewer access.",
-    "ownerServices": "Create and submit forward the caller token to Organization, Room, and Scheduling APIs. Current building, department, room status/capacity/rules, calendar/timezone, recurrence, working windows, holidays, and closures are validated before writes. Missing, denied, inconsistent, or unavailable owner data fails closed.",
-    "requestLifecycle": "Create stores a validated DRAFT. POST /api/v1/booking-requests/{id}/submit is requester-only, locks the draft, revalidates current owner and Identity policies, and transitions to PENDING_APPROVAL. POST /api/v1/booking-requests/{id}/decision permits an authorized scoped approver to approve or reject only a pending request; self-approval is denied. Approval revalidates current policy and occupancy and atomically creates a confirmed reservation, private meeting, and accepted requester organizer participant. Rejection creates no reservation or meeting. No policy-inferred or implicit auto-confirm occurs.",
+    "authenticationAndAuthorization": "Every route requires a bearer token and current Identity authorization. Create/submit/direct-create enforce current requester or direct-booking authority, department/building scope, and VIP privilege when applicable; list/get enforce requester or scoped reviewer access. Direct create resolves Identity authority before owner-data reads and rechecks VIP eligibility after Room identifies a VIP room.",
+    "ownerServices": "Create, submit, direct-create, and confirmation forward the caller token to Identity, Organization, Room, and Scheduling APIs as applicable. Current building, department, room status/capacity/rules, calendar/timezone, recurrence, working windows, holidays, closures, and occupancy are validated before writes; confirmation revalidates authoritative inputs. Missing, denied, inconsistent, or unavailable owner data fails closed.",
+    "requestLifecycle": "Create stores a validated DRAFT. POST /api/v1/booking-requests/{id}/submit is requester-only, locks the draft, revalidates current owner and Identity policies, and transitions to PENDING_APPROVAL. POST /api/v1/booking-requests/{id}/decision permits an authorized scoped approver to approve or reject only a pending request; self-approval is denied. Approval revalidates current policy and occupancy and atomically creates a confirmed reservation, private meeting, and accepted requester organizer participant. Rejection creates no reservation or meeting. POST /api/v1/bookings/direct creates a normal pending request whenever the active Room Rule requires approval, regardless of whether the initiator is Admin, Super Admin, or eligible Secretary; no reservation or meeting exists until a different authorized reviewer approves. If the policy does not require approval, it confirms atomically. No policy-inferred or implicit auto-confirm occurs.",
     "callerControlledFields": "Requester identity, request type, status, approval outcome, and organizational authorization are derived from persisted data, Identity, and owner services, not caller-supplied payload fields.",
     "gateway": "No Booking route is configured on the API Gateway; publication and routing remain deferred to Stage 11.",
-    "futureWorkflows": "Direct booking, cancellation, extensions, share links, and the Booking occupancy provider are not exposed."
+    "futureWorkflows": "Cancellation, extensions, share links, and the Booking occupancy provider are not exposed."
   },
   "authorizationPolicyDocumentation": "identity-service/AUTHORIZATION.md",
   "authorization": {

@@ -348,6 +348,71 @@ class BookingDecisionPostgresTests {
                 .containsExactlyInAnyOrder(BookingRequestStatus.APPROVED, BookingRequestStatus.PENDING_APPROVAL);
     }
 
+    @Test
+    void laterRecurrenceOccurrenceConflictIsRejectedWithoutPartialApproval() {
+        UUID sharedRoomId = UUID.randomUUID();
+        Instant secondDayStart = START.plusSeconds(86_400);
+        Instant thirdDayStart = START.plusSeconds(172_800);
+        BookingRequest firstRequest = pendingRecurringRequest(UUID.randomUUID(), sharedRoomId,
+                UUID.randomUUID(), START, END);
+        BookingRequest secondRequest = pendingRecurringRequest(UUID.randomUUID(), sharedRoomId,
+                UUID.randomUUID(), secondDayStart, secondDayStart.plusSeconds(3_600));
+        configureAuthorization(firstRequest, UUID.randomUUID());
+        configureAuthorization(secondRequest, UUID.randomUUID());
+        when(ownerServicesClient.validateRequest(any(BookingRequestFacts.class), eq(TOKEN), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    BookingRequestFacts facts = invocation.getArgument(0);
+                    Instant nextStart = facts.startsAt().plusSeconds(86_400);
+                    Instant nextEnd = facts.endsAt().plusSeconds(86_400);
+                    return recurrenceReferences(facts, List.of(
+                            new SchedulingOccurrence(
+                                    facts.startsAt().atZone(ZoneId.of("Africa/Kigali")).toLocalDate(),
+                                    facts.startsAt(), facts.endsAt()),
+                            new SchedulingOccurrence(
+                                    nextStart.atZone(ZoneId.of("Africa/Kigali")).toLocalDate(),
+                                    nextStart, nextEnd)));
+                });
+
+        decisionService.decide(firstRequest.getId(),
+                new BookingDecisionRequest(ApprovalDecisionType.APPROVED, null));
+        assertThat(occurrencesForRequest(firstRequest.getId())).isEqualTo(2);
+
+        assertThatThrownBy(() -> decisionService.decide(secondRequest.getId(),
+                new BookingDecisionRequest(ApprovalDecisionType.APPROVED, null)))
+                .isInstanceOf(DomainException.class)
+                .satisfies(exception -> assertThat(((DomainException) exception).code())
+                        .isEqualTo("ROOM_OCCUPANCY_CONFLICT"));
+
+        assertThat(bookingRequests.findById(secondRequest.getId()).orElseThrow().getStatus())
+                .isEqualTo(BookingRequestStatus.PENDING_APPROVAL);
+        assertThat(decisionsForRequest(secondRequest.getId())).isZero();
+        assertThat(reservationsForRequest(secondRequest.getId())).isZero();
+        assertThat(occurrencesForRequest(secondRequest.getId())).isZero();
+    }
+
+    @Test
+    void aNewReservationMayStartExactlyAtThePriorReleaseBufferBoundary() {
+        UUID sharedRoomId = UUID.randomUUID();
+        BookingRequest firstRequest = pendingRequest(UUID.randomUUID(), sharedRoomId, START, END);
+        Instant secondStart = END.plusSeconds(15 * 60L);
+        BookingRequest secondRequest = pendingRequest(UUID.randomUUID(), sharedRoomId,
+                secondStart, secondStart.plusSeconds(3_600));
+        configureAuthorization(firstRequest, UUID.randomUUID());
+        configureAuthorization(secondRequest, UUID.randomUUID());
+        configureOwnerValidation(firstRequest, 15);
+        configureOwnerValidation(secondRequest, 15);
+
+        decisionService.decide(firstRequest.getId(),
+                new BookingDecisionRequest(ApprovalDecisionType.APPROVED, null));
+        decisionService.decide(secondRequest.getId(),
+                new BookingDecisionRequest(ApprovalDecisionType.APPROVED, null));
+
+        assertThat(reservationsForRequest(firstRequest.getId())).isEqualTo(1);
+        assertThat(reservationsForRequest(secondRequest.getId())).isEqualTo(1);
+        assertThat(occurrencesForRequest(firstRequest.getId())).isEqualTo(1);
+        assertThat(occurrencesForRequest(secondRequest.getId())).isEqualTo(1);
+    }
+
     private String approveRequest(BookingDecisionService service, BookingRequest request,
                                  CountDownLatch ready, CountDownLatch start) throws Exception {
         MockHttpServletRequest httpRequest = new MockHttpServletRequest();
@@ -372,6 +437,15 @@ class BookingDecisionPostgresTests {
         return bookingRequests.saveAndFlush(request);
     }
 
+    private BookingRequest pendingRecurringRequest(UUID requesterId, UUID roomId, UUID recurrenceRuleId,
+                                                   Instant startsAt, Instant endsAt) {
+        BookingRequest request = new BookingRequest("BR-" + UUID.randomUUID(),
+                BookingRequestType.SECRETARY_REQUEST, requesterId, UUID.randomUUID(), roomId, UUID.randomUUID(),
+                recurrenceRuleId, "Test meeting", "Test agenda", startsAt, endsAt, 3, false,
+                BookingRequestStatus.PENDING_APPROVAL, null, Instant.now());
+        return bookingRequests.saveAndFlush(request);
+    }
+
     private void configureAuthorization(BookingRequest request, UUID actorId) {
         when(authorizationClient.authorizeApproval(request.getRequestedByUserId(), request.getOfficeBuildingId()))
                 .thenReturn(new BookingAuthorizationResponse(actorId,
@@ -385,9 +459,20 @@ class BookingDecisionPostgresTests {
 
     private ValidatedBookingReferences references(BookingRequestFacts facts, int releaseBufferMinutes) {
         LocalDate occurrenceDate = facts.startsAt().atZone(ZoneId.of("Africa/Kigali")).toLocalDate();
+        return recurrenceReferences(facts, List.of(
+                new SchedulingOccurrence(occurrenceDate, facts.startsAt(), facts.endsAt())), releaseBufferMinutes);
+    }
+
+    private ValidatedBookingReferences recurrenceReferences(BookingRequestFacts facts,
+                                                             List<SchedulingOccurrence> intervals) {
+        return recurrenceReferences(facts, intervals, 5);
+    }
+
+    private ValidatedBookingReferences recurrenceReferences(BookingRequestFacts facts,
+                                                             List<SchedulingOccurrence> intervals,
+                                                             int releaseBufferMinutes) {
         return new ValidatedBookingReferences(facts.officeBuildingId(), facts.departmentId(), facts.roomId(),
-                false, "Africa/Kigali", true, releaseBufferMinutes,
-                List.of(new SchedulingOccurrence(occurrenceDate, facts.startsAt(), facts.endsAt())));
+                false, "Africa/Kigali", true, releaseBufferMinutes, intervals);
     }
 
     private long decisionsForRequest(UUID requestId) {

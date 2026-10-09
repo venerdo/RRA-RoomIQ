@@ -33,7 +33,7 @@ public class BookingDirectBookingController {
     @PostMapping("/direct")
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Create an authorized direct booking",
-            description = "Requires current Admin/Super Admin direct-booking authority or an eligible Secretary. A Secretary subject to the active room approval rule receives a PENDING_APPROVAL request without a reservation; permitted direct confirmations atomically create the reservation, every validated occurrence, and the private meeting.")
+            description = "Requires current Admin/Super Admin direct-booking authority or an eligible Secretary. Any initiator subject to the active room approval rule receives a PENDING_APPROVAL request without a reservation or meeting; permitted direct confirmations atomically create the reservation, every validated occurrence, and the private meeting.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(
             responseCode = "201", description = "Direct booking confirmed or submitted for required approval")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -48,7 +48,7 @@ public class BookingDirectBookingController {
             @Valid @RequestBody CreateBookingRequest request,
             @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
         DirectBookingResponse response = service.create(request, idempotencyKey);
-            String message = response.status() == BookingRequestStatus.PENDING_APPROVAL
+        String message = response.status() == BookingRequestStatus.PENDING_APPROVAL
                 ? "Booking request submitted for approval" : "Direct booking confirmed";
         return ApiResponse.success(message, response);
     }

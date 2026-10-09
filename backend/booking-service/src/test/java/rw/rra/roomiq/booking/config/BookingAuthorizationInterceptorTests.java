@@ -1,6 +1,5 @@
 package rw.rra.roomiq.booking.config;
 
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -12,6 +11,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -25,25 +25,38 @@ class BookingAuthorizationInterceptorTests {
 
     @Test
     void authenticatesEachVersionedBookingRequestAndStoresIdentityActor() {
-        MockHttpServletRequest request = request("GET", "/api/v1/bookings", "Bearer valid-token");
+        MockHttpServletRequest request = request("GET", "/api/v1/bookings", "Bearer test-token");
         UUID actorId = UUID.randomUUID();
-        when(authorizationClient.authenticate("Bearer valid-token")).thenReturn(actorId);
+        when(authorizationClient.authenticate("Bearer test-token")).thenReturn(actorId);
 
         assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
 
         assertThat(request.getAttribute(BookingAuthorizationInterceptor.ACTOR_USER_ID_ATTRIBUTE))
                 .isEqualTo(actorId);
-        verify(authorizationClient).authenticate("Bearer valid-token");
+        verify(authorizationClient).authenticate("Bearer test-token");
+    }
+
+    @Test
+    void directBookingRouteUsesTheSameVersionedBearerGuard() {
+        MockHttpServletRequest request = request("POST", "/api/v1/bookings/direct", "Bearer direct-booking-test");
+        UUID actorId = UUID.randomUUID();
+        when(authorizationClient.authenticate(anyString())).thenReturn(actorId);
+
+        assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
+
+        assertThat(request.getAttribute(BookingAuthorizationInterceptor.ACTOR_USER_ID_ATTRIBUTE))
+                .isEqualTo(actorId);
+        verify(authorizationClient).authenticate(anyString());
     }
 
     @Test
     void optionsRequestsAreAuthenticatedAndDelegatedToo() {
-        MockHttpServletRequest request = request("OPTIONS", "/api/v1/bookings", "Bearer valid-token");
-        when(authorizationClient.authenticate("Bearer valid-token")).thenReturn(UUID.randomUUID());
+        MockHttpServletRequest request = request("OPTIONS", "/api/v1/bookings", "Bearer test-token");
+        when(authorizationClient.authenticate("Bearer test-token")).thenReturn(UUID.randomUUID());
 
         assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
 
-        verify(authorizationClient).authenticate("Bearer valid-token");
+        verify(authorizationClient).authenticate("Bearer test-token");
     }
 
     @Test

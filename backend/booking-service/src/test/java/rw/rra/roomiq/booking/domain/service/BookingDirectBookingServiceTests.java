@@ -32,7 +32,6 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -124,12 +123,13 @@ class BookingDirectBookingServiceTests {
                 .thenAnswer(invocation -> {
                     BookingRequest pending = invocation.getArgument(0);
                     assertThat(pending.getStatus()).isEqualTo(BookingRequestStatus.PENDING_APPROVAL);
+                    pending.approve();
                     return new BookingConfirmationService.ConfirmedBooking(reservation, meeting, 1);
                 });
 
         var response = service.create(request, null);
 
-        assertThat(response.status()).isEqualTo(BookingRequestStatus.PENDING_APPROVAL);
+        assertThat(response.status()).isEqualTo(BookingRequestStatus.APPROVED);
         assertThat(response.reservationId()).isEqualTo(reservationId);
         assertThat(response.meetingId()).isEqualTo(meetingId);
         verify(confirmationService).confirm(any(BookingRequest.class),

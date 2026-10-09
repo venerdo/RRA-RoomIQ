@@ -113,7 +113,7 @@ class BookingServiceApplicationTests {
     }
 
     @Test
-    void onlyApprovedBookingRequestApiRoutesAreExposedAndOtherBusinessRoutesRemainUnavailable() {
+    void onlyApprovedBookingAndDirectBookingApiRoutesAreExposedAndOtherBusinessRoutesRemainUnavailable() {
         Set<String> apiRoutes = handlerMapping.getHandlerMethods().keySet().stream()
                 .flatMap(mapping -> mapping.getPatternValues().stream())
                 .filter(path -> path.startsWith("/api/v1/"))
@@ -123,7 +123,8 @@ class BookingServiceApplicationTests {
                 "/api/v1/booking-requests",
                 "/api/v1/booking-requests/{id}/submit",
                 "/api/v1/booking-requests/{id}/decision",
-                "/api/v1/booking-requests/{id}");
+                "/api/v1/booking-requests/{id}",
+                "/api/v1/bookings/direct");
     }
 
     @Test

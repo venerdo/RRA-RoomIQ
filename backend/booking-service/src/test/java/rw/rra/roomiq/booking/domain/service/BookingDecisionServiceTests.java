@@ -13,6 +13,8 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import rw.rra.roomiq.booking.domain.dto.BookingDecisionRequest;
 import rw.rra.roomiq.booking.domain.entity.ApprovalDecision;
 import rw.rra.roomiq.booking.domain.entity.BookingRequest;
+import rw.rra.roomiq.booking.domain.entity.Meeting;
+import rw.rra.roomiq.booking.domain.entity.Reservation;
 import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestStatus;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestType;
@@ -79,6 +81,17 @@ class BookingDecisionServiceTests {
         authorization = new BookingAuthorizationResponse(approverId, requesterId, "Trusted Requester");
         when(bookingRequests.findByIdForUpdate(requestId)).thenReturn(Optional.of(pendingRequest));
         lenient().when(authorizationClient.authorizeApproval(requesterId, buildingId)).thenReturn(authorization);
+        Reservation reservation = org.mockito.Mockito.mock(Reservation.class);
+        Meeting meeting = org.mockito.Mockito.mock(Meeting.class);
+        lenient().when(reservation.getId()).thenReturn(UUID.randomUUID());
+        lenient().when(meeting.getId()).thenReturn(UUID.randomUUID());
+        lenient().when(confirmationService.confirm(any(BookingRequest.class),
+                any(BookingAuthorizationResponse.class), eq(NOW)))
+                .thenAnswer(invocation -> {
+                    BookingRequest request = invocation.getArgument(0);
+                    request.approve();
+                    return new BookingConfirmationService.ConfirmedBooking(reservation, meeting, 1);
+                });
         MockHttpServletRequest httpRequest = new MockHttpServletRequest();
         httpRequest.addHeader("Authorization", TOKEN);
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(httpRequest));

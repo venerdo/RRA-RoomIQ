@@ -171,6 +171,33 @@ class BookingAuthorizationControllerTests {
     }
 
     @Test
+    void adminAndSuperAdminDirectAuthorityNeverAllowsSelfApproval() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser admin = createUser("direct-admin-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, buildingId);
+        Role adminRole = createRoleWithPermissions(
+                "DIRECT_ADMIN", "BOOKING_DIRECT_CREATE", "BOOKING_APPROVE");
+        userRoles.saveAndFlush(new UserRole(admin, adminRole, buildingId, null));
+
+        AppUser superAdmin = createUser("direct-super-admin-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, null);
+        Role superAdminRole = createRoleWithPermissions(
+                "SUPER_ADMIN", "IDENTITY_SYSTEM_ADMIN", "BOOKING_DIRECT_CREATE", "BOOKING_APPROVE");
+        userRoles.saveAndFlush(new UserRole(superAdmin, superAdminRole, null, null));
+
+        for (AppUser privilegedUser : List.of(admin, superAdmin)) {
+            String actor = privilegedUser.getId().toString();
+            mockMvc.perform(bookingDirect(actor, departmentId, buildingId, false))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.actorUserId").value(actor))
+                    .andExpect(jsonPath("$.directBookingAuthority").value("ADMIN"));
+            mockMvc.perform(bookingDecision(actor, "APPROVE", privilegedUser.getId(), buildingId))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
     void eligibleSecretaryDirectBookingRequiresCurrentScopeAndVipPrivilege() throws Exception {
         UUID buildingId = UUID.randomUUID();
         UUID departmentId = UUID.randomUUID();

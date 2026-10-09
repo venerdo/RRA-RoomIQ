@@ -86,6 +86,18 @@ class SchedulingApiTests {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
 
+        for (String path : new String[] {
+                "/api/v1/holidays",
+                "/api/v1/closure-periods",
+                "/api/v1/recurrence-rules",
+                "/api/v1/scheduling-constraints/validate",
+                "/api/v1/availability/search"
+        }) {
+            mockMvc.perform(post(path).contentType(APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+        }
+
         verifyNoInteractions(authorizationClient);
     }
 

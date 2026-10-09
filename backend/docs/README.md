@@ -2,11 +2,11 @@
 
 ## Implementation roadmap
 
-The authoritative end-to-end roadmap and Stage 2 through Stage 5 checklists and stage-gate rules are maintained in [Backend Documentation](../Documentation.md#end-to-end-implementation-roadmap). Stage 3 and Stage 4 are accepted; S5-01 through S5-07 are implemented and verified, and Stage 5 awaits explicit user acceptance.
+The authoritative end-to-end roadmap, requirement checklists, and stage-gate rules are maintained in [Backend Documentation](../Documentation.md#end-to-end-implementation-roadmap). Stages 3 through 5 are accepted. The proposed Stage 6 checklist is documented there; implementation has not started and checklist approval is pending. The user selected all-or-nothing handling for recurring-series conflicts.
 
 ## Stage 1 status
 
-Stage 1 is complete and verified. Stage 2 is complete through S2-18 verification. Stage 3 and Stage 4 are accepted. S5-01 through S5-07 are implemented and verified; Stage 5 awaits explicit user acceptance. Scheduling owns calendar rules, bounded date-based recurrence evaluation, constraint validation, and candidate availability; Room retains maintenance/status, while Booking owns reservation occupancy and its transactional conflict barrier in S6. Non-empty availability candidates fail closed until Booking implements its occupancy provider. All Scheduling business routes require an Identity-issued bearer token and server-side authorization; they are not routed through the API Gateway in Stage 5. Production deployment must enforce private network ingress.
+Stage 1 is complete and verified. Stage 2 is complete through S2-18 verification. Stages 3, 4, and 5 are accepted. Scheduling owns calendar rules, bounded date-based recurrence evaluation, constraint validation, and candidate availability; Room retains maintenance/status, while Booking owns reservation occupancy and its transactional conflict barrier in S6. Non-empty availability candidates fail closed until Booking implements its occupancy provider. All Scheduling business routes require an Identity-issued bearer token and server-side authorization; they are not routed through the API Gateway in Stage 5. Production deployment must enforce private network ingress. Stage 6's proposed requirement checklist is in the roadmap; Booking remains a scaffold and no Stage 6 API is implemented or exposed.
 
 ### SRS/ERD traceability
 

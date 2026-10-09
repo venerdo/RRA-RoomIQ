@@ -1,9 +1,9 @@
 {
   "apiVersion": "1.0.0",
   "project": "RRA RoomIQ",
-  "stage": "Stage 5",
-  "status": "stage-5-in-progress",
-  "stageStatusReason": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-07 are implemented and verified; explicit Stage 5 acceptance is pending.",
+  "stage": "Stage 6",
+  "status": "stage-6-checklist-proposed",
+  "stageStatusReason": "Stages 3, 4, and 5 are accepted. The proposed Stage 6 Booking checklist is in Backend Documentation; implementation has not started and checklist approval is pending. The recurring-series conflict policy is all-or-nothing. No Stage 6 Booking endpoints are implemented or exposed.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -586,7 +586,7 @@
         "cleanFullReactor": "mvn -f backend/pom.xml clean test passed 25 suites and 69 tests across all 11 reactor projects, zero failures/errors/skips."
       },
       "architectureAndErd": "No unauthorized ERD or service-boundary changes were made; the approved SRS and ERD remain unchanged during S3-11.",
-      "stageAcceptance": "Stage 3 S3-01 through S3-11 and Stage 4 S4-01 through S4-12 are accepted. Stage 5 S5-01 through S5-07 are implemented and verified; explicit Stage 5 acceptance is pending."
+      "stageAcceptance": "Stages 3, 4, and 5 are accepted by the user."
     }
   },
   "stage4Progress": {
@@ -887,7 +887,7 @@
       "authorization": "Every /api/v1 request, including OPTIONS, forwards the caller bearer token to POST /api/v1/internal/authorization/scheduling. Active users may READ; MANAGE requires current IDENTITY_SYSTEM_ADMIN. Missing credentials, denial, inactive users, and Identity outages fail closed. The actor is derived from the authenticated token; request-supplied actor, role, permission, and scope are not accepted.",
       "serviceExposure": "All nine operations are served by Scheduling and guarded by the /api/v1/** authorization interceptor. Missing bearer credentials are rejected before controller execution; reads and OPTIONS delegate Identity READ, while mutations and unsupported methods delegate Identity MANAGE. The API Gateway currently has no Scheduling route; Gateway publication is deferred to Stage 11. These are authenticated service routes, not public/Gateway routes. OpenAPI declares bearer authentication for each operation but does not publish the routes. The repository has no deployment ingress policy; production must restrict direct service and OpenAPI access to a private/trusted network.",
       "apiContract": "Nine operations use Scheduling-owned DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID propagation, and per-operation bearer security declarations in OpenAPI.",
-      "verification": "PostgreSQL-backed route tests confirm missing credentials are denied, GET delegates READ, and POST delegates MANAGE. The S5-07 Scheduling suite passed 48 tests; Identity/common-web passed 37 tests; the full backend reactor passed 156 tests, with zero failures, errors, or skips.",
+      "verification": "Follow-up PostgreSQL-backed route tests confirm missing credentials are denied, GET delegates READ, POST delegates READ or MANAGE as appropriate, OPTIONS requires authentication and delegates READ, and inactive users are denied by Identity. The complete Scheduling suite passed 50 tests; Identity/common-web passed 44 tests; the full 11-module backend reactor passed 159 tests, with zero failures, errors, or skips.",
       "requirementsAndErd": "No requirements or ERD change was needed."
     },
     "S5-03": {
@@ -1002,22 +1002,49 @@
       },
       "emptyAndRecurringResults": "If no preliminary candidate windows exist, the API may return an empty list without calling Booking and sets bookingOccupancyIncluded=false. Candidate-producing searches require successful occupancy inclusion and otherwise fail closed. Recurring results are occurrence-level only; Booking must validate the full series before confirmation.",
       "apiContract": "Scheduling-owned validated request/response DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID, protected OpenAPI. The API is read-only and writes no Room maintenance or Booking occupancy.",
-      "verification": "Availability calculation covers calendar windows, policy boundaries, maintenance, closures, holidays, working facilities, current occupancy subtraction, recurrence occurrence filtering, timezone/DST handling, dependency failures, and stale/partial occupancy. Focused availability/API/client tests passed 33, the complete Scheduling suite passed 46, Identity/common-web passed 37, and the full 11-module backend reactor passed 154 tests, all with zero failures, errors, or skips.",
+      "verification": "Availability calculation covers calendar windows, policy boundaries, maintenance, closures, holidays, working facilities, current occupancy subtraction, recurrence occurrence filtering, timezone/DST handling, dependency failures, and stale/partial occupancy. The S5-06 follow-up focused authorization/API/availability selection passed 23 tests; the complete Scheduling suite passed 50, Identity/common-web passed 44, and the full 11-module backend reactor passed 159 tests, all with zero failures, errors, or skips.",
       "requirementsAndErd": "No schema migration, SRS, requirements specification, or approved ERD change was required."
     },
     "S5-07": {
       "name": "Stage 5 regression and documentation gate",
       "status": "complete",
       "verification": {
-        "focusedSchedulingPostgreSQL": {"passed": 48, "failed": 0, "errors": 0, "skipped": 0},
-        "identityAndCommonWeb": {"passed": 37, "failed": 0, "errors": 0, "skipped": 0},
-        "fullBackendReactor": {"modules": 11, "passed": 156, "failed": 0, "errors": 0, "skipped": 0},
-        "coverage": ["migration", "repository", "domain", "API", "authorization", "timezone", "holiday", "closure", "recurrence", "availability", "OpenAPI"]
+        "focusedSchedulingPostgreSQL": {"passed": 50, "failed": 0, "errors": 0, "skipped": 0},
+        "identityAndCommonWeb": {"passed": 44, "failed": 0, "errors": 0, "skipped": 0},
+        "fullBackendReactor": {"modules": 11, "passed": 159, "failed": 0, "errors": 0, "skipped": 0},
+        "focusedFollowUpSelection": {"passed": 23, "failed": 0, "errors": 0, "skipped": 0},
+        "coverage": ["migration", "repository", "domain", "API", "authorization", "anonymous route denial", "OPTIONS authentication", "inactive-user denial", "timezone", "holiday", "closure", "recurrence", "availability", "OpenAPI"]
       },
-      "documentation": "Backend roadmap, service README, API contract, and architecture/readme references are synchronized through S5-07.",
+      "documentation": "Backend roadmap, service README, API contract, and architecture/readme references are synchronized through S5-07 and follow-up S5-06 authorization hardening. Stage 5 Scheduling business routes require bearer/Identity checks but are not API Gateway/public routes. Deployment ingress must restrict direct business API and OpenAPI access to a private/trusted network.",
       "requirementsAndErd": "No requirements, SRS, ERD, or migration change was required.",
-      "stageAcceptance": "Verification complete; explicit user acceptance is pending. Booking's concurrent reservation exclusion/locking tests remain an S6 acceptance requirement."
+      "stageAcceptance": "Stage 5 was accepted by the user on 2026-10-09. Booking's concurrent reservation exclusion/locking tests remain a Stage 6 acceptance requirement."
     }
+  },
+  "stage6Progress": {
+    "status": "checklist-proposed",
+    "implementationStarted": false,
+    "checklist": "Documentation.md#stage-6-requirement-checklist-proposed-pending-user-approval",
+    "requirements": [
+      "S6-01",
+      "S6-02",
+      "S6-03",
+      "S6-04",
+      "S6-05",
+      "S6-06",
+      "S6-07",
+      "S6-08",
+      "S6-09",
+      "S6-10",
+      "S6-11",
+      "S6-12",
+      "S6-13",
+      "S6-14"
+    ],
+    "pendingDecisions": [
+      "User approval of the proposed S6 checklist"
+    ],
+    "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
+    "endpointStatus": "No Stage 6 Booking workflow or occupancy-provider API is currently implemented or exposed."
   },
   "schedulingApiExposurePolicy": {
     "businessRoutes": "/api/v1/**",

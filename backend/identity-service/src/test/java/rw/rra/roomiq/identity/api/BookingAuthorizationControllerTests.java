@@ -152,6 +152,44 @@ class BookingAuthorizationControllerTests {
     }
 
     @Test
+    void reservationLifecycleAuthorizationEnforcesOrganizerAndCurrentBuildingDepartmentScope() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        UUID otherBuildingId = UUID.randomUUID();
+        AppUser organizer = createUser("lifecycle-organizer-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        AppUser colleague = createUser("lifecycle-colleague-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        AppUser reviewer = createUser("lifecycle-reviewer-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, buildingId);
+        AppUser outOfScopeReviewer = createUser("lifecycle-out-of-scope-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, otherBuildingId);
+
+        Role organizerRole = createRoleWithPermissions("LIFECYCLE_OWNER", "BOOKING_LIFECYCLE_OWN");
+        Role reviewerRole = createRoleWithPermissions("LIFECYCLE_ADMIN", "BOOKING_LIFECYCLE_MANAGE");
+        userRoles.saveAndFlush(new UserRole(organizer, organizerRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(colleague, organizerRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(reviewer, reviewerRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(outOfScopeReviewer, reviewerRole, otherBuildingId, null));
+
+        mockMvc.perform(reservationLifecycle(organizer.getId(), organizer.getId(), departmentId, buildingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actorUserId").value(organizer.getId().toString()));
+        mockMvc.perform(reservationLifecycle(colleague.getId(), organizer.getId(), departmentId, buildingId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(reservationLifecycle(organizer.getId(), organizer.getId(), UUID.randomUUID(), buildingId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(reservationLifecycle(organizer.getId(), organizer.getId(), departmentId, otherBuildingId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(reservationLifecycle(reviewer.getId(), organizer.getId(), departmentId, buildingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.resourceOwnerUserId").value(organizer.getId().toString()));
+        mockMvc.perform(reservationLifecycle(
+                        outOfScopeReviewer.getId(), organizer.getId(), departmentId, buildingId))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void directBookingPermissionDoesNotGrantBookingRequestCreation() throws Exception {
         UUID buildingId = UUID.randomUUID();
         UUID departmentId = UUID.randomUUID();
@@ -314,6 +352,17 @@ class BookingAuthorizationControllerTests {
                 .content("""
                         {"action":"%s","resourceOwnerUserId":"%s","buildingId":"%s"}
                         """.formatted(action, resourceOwnerUserId, buildingId));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder reservationLifecycle(
+            UUID tokenSubject, UUID organizerUserId, UUID departmentId, UUID buildingId) {
+        return post(AUTHORIZATION_PATH)
+                .with(jwt().jwt(token -> token.subject(tokenSubject.toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"action":"RESERVATION_LIFECYCLE","resourceOwnerUserId":"%s",
+                         "departmentId":"%s","buildingId":"%s"}
+                        """.formatted(organizerUserId, departmentId, buildingId));
     }
 
     private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder bookingRequestList(

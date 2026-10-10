@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.postgresql.util.PGobject;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -20,8 +21,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import rw.rra.roomiq.booking.domain.dto.BookingDecisionRequest;
-import rw.rra.roomiq.booking.domain.entity.BookingRequest;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
+import rw.rra.roomiq.booking.domain.entity.BookingRequest;
 import rw.rra.roomiq.booking.domain.entity.ReservationOccurrence;
 import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestStatus;
@@ -37,6 +38,7 @@ import rw.rra.roomiq.booking.domain.repository.MeetingRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
 import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
+import rw.rra.roomiq.booking.domain.service.ReservationLifecycleService;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationResponse;
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient;
@@ -45,6 +47,8 @@ import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.SchedulingOc
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.ValidatedBookingReferences;
 import rw.rra.roomiq.common.web.DomainException;
 
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -64,6 +68,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest
@@ -88,6 +93,8 @@ class BookingDecisionPostgresTests {
 
     @Autowired
     private BookingDecisionService decisionService;
+    @Autowired
+    private ReservationLifecycleService reservationLifecycleService;
     @Autowired
     private BookingRequestRepository bookingRequests;
     @Autowired
@@ -175,6 +182,221 @@ class BookingDecisionPostgresTests {
         assertThat(organizer.getInviteStatus()).isEqualTo(InviteStatus.ACCEPTED);
         assertThat(response.reservationId()).isEqualTo(reservation.getId());
         assertThat(response.meetingId()).isEqualTo(meeting.getId());
+    }
+
+    @Test
+    void checkInAndCompletionSetIndependentServerTimestampsAtomically() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID actor = UUID.randomUUID();
+        when(authorizationClient.authorizeReservationLifecycle(
+                reservation.getOrganizerUserId(), reservation.getBookingRequest().getDepartmentId(),
+                reservation.getBookingRequest().getOfficeBuildingId())).thenReturn(actor);
+
+        var checkedIn = reservationLifecycleService.checkIn(reservation.getId());
+
+        assertThat(checkedIn.status()).isEqualTo(ReservationStatus.IN_PROGRESS);
+        assertThat(checkedIn.checkedInAt()).isNotNull();
+        assertThat(checkedIn.completedAt()).isNull();
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getCheckedInAt())
+                .isEqualTo(checkedIn.checkedInAt());
+        verify(authorizationClient).authorizeReservationLifecycle(reservation.getOrganizerUserId(),
+                reservation.getBookingRequest().getDepartmentId(),
+                reservation.getBookingRequest().getOfficeBuildingId());
+
+        var completed = reservationLifecycleService.complete(reservation.getId());
+
+        assertThat(completed.status()).isEqualTo(ReservationStatus.COMPLETED);
+        assertThat(completed.checkedInAt()).isEqualTo(checkedIn.checkedInAt());
+        assertThat(completed.completedAt()).isNotNull();
+        assertThat(completed.completedAt().compareTo(checkedIn.checkedInAt())).isGreaterThanOrEqualTo(0);
+        Reservation persisted = reservations.findById(reservation.getId()).orElseThrow();
+        assertThat(persisted.getStatus()).isEqualTo(ReservationStatus.COMPLETED);
+        assertThat(persisted.getCheckedInAt()).isEqualTo(checkedIn.checkedInAt());
+        assertThat(persisted.getCompletedAt()).isEqualTo(completed.completedAt());
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT (status = 'COMPLETED') = (completed_at IS NOT NULL)
+                FROM reservation WHERE id = ?
+                """, Boolean.class, reservation.getId())).isTrue();
+    }
+
+    @Test
+    void invalidAndDuplicateLifecycleTransitionsLeavePersistedTimestampsUnchanged() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenReturn(UUID.randomUUID());
+
+        assertLifecycleConflict(() -> reservationLifecycleService.complete(reservation.getId()));
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getCompletedAt()).isNull();
+
+        var checkedIn = reservationLifecycleService.checkIn(reservation.getId());
+        assertLifecycleConflict(() -> reservationLifecycleService.checkIn(reservation.getId()));
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getCheckedInAt())
+                .isEqualTo(checkedIn.checkedInAt());
+
+        var completed = reservationLifecycleService.complete(reservation.getId());
+        assertLifecycleConflict(() -> reservationLifecycleService.complete(reservation.getId()));
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getCompletedAt())
+                .isEqualTo(completed.completedAt());
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "UPDATE reservation SET status = 'COMPLETED', completed_at = NULL WHERE id = ?",
+                reservation.getId())).isInstanceOf(RuntimeException.class);
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getCompletedAt())
+                .isEqualTo(completed.completedAt());
+    }
+
+    @Test
+    void identityAuthorizationFailureDoesNotChangeReservationLifecycle() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenThrow(new DomainException(HttpStatus.FORBIDDEN, "ACCESS_DENIED", "Denied"));
+
+        assertThatThrownBy(() -> reservationLifecycleService.checkIn(reservation.getId()))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).status()).isEqualTo(HttpStatus.FORBIDDEN));
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenReturn(UUID.randomUUID());
+        var checkedIn = reservationLifecycleService.checkIn(reservation.getId());
+        reset(authorizationClient);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenThrow(new DomainException(HttpStatus.FORBIDDEN, "ACCESS_DENIED", "Denied"));
+        assertThatThrownBy(() -> reservationLifecycleService.complete(reservation.getId()))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).status()).isEqualTo(HttpStatus.FORBIDDEN));
+        Reservation unchanged = reservations.findById(reservation.getId()).orElseThrow();
+        assertThat(unchanged.getStatus()).isEqualTo(ReservationStatus.IN_PROGRESS);
+        assertThat(unchanged.getCheckedInAt()).isEqualTo(checkedIn.checkedInAt());
+        assertThat(unchanged.getCompletedAt()).isNull();
+    }
+
+    @Test
+    void concurrentDuplicateCheckInsCommitOnlyOneLifecycleTransition() throws Exception {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenAnswer(invocation -> UUID.randomUUID());
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        Callable<String> checkIn = () -> {
+            MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+            httpRequest.addHeader("Authorization", TOKEN);
+            RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(httpRequest));
+            ready.countDown();
+            start.await(10, TimeUnit.SECONDS);
+            try {
+                reservationLifecycleService.checkIn(reservation.getId());
+                return "checked-in";
+            } catch (DomainException exception) {
+                return exception.code();
+            } finally {
+                RequestContextHolder.resetRequestAttributes();
+            }
+        };
+        try {
+            Future<String> first = executor.submit(checkIn);
+            Future<String> second = executor.submit(checkIn);
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder("checked-in", "RESERVATION_STATE_CONFLICT");
+        } finally {
+            executor.shutdownNow();
+        }
+        Reservation persisted = reservations.findById(reservation.getId()).orElseThrow();
+        assertThat(persisted.getStatus()).isEqualTo(ReservationStatus.IN_PROGRESS);
+        assertThat(persisted.getCheckedInAt()).isNotNull();
+        assertThat(persisted.getCompletedAt()).isNull();
+    }
+
+    @Test
+    void completedReservationStillOccupiesItsBufferedHalfOpenInterval() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), roomId, START, END);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenReturn(UUID.randomUUID());
+        reservationLifecycleService.checkIn(reservation.getId());
+        reservationLifecycleService.complete(reservation.getId());
+
+        BookingRequest overlapping = pendingRequest(UUID.randomUUID(), roomId, START.plusSeconds(30), END);
+        configureAuthorization(overlapping, UUID.randomUUID());
+        configureOwnerValidation(overlapping, 5);
+
+        assertThatThrownBy(() -> decisionService.decide(overlapping.getId(),
+                new BookingDecisionRequest(ApprovalDecisionType.APPROVED, null)))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("ROOM_OCCUPANCY_CONFLICT"));
+        assertThat(reservationOccurrences.existsRoomOccupancyConflict(
+                roomId, START, END.plusSeconds(300))).isTrue();
+    }
+
+    @Test
+    void terminalReservationsCannotReenterTheLifecycle() throws SQLException {
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenReturn(UUID.randomUUID());
+        for (ReservationStatus terminalStatus : List.of(ReservationStatus.CANCELLED, ReservationStatus.RELEASED)) {
+            Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+            jdbcTemplate.update("UPDATE reservation SET status = ? WHERE id = ?",
+                    terminalStatus.name(), reservation.getId());
+
+            assertLifecycleConflict(() -> reservationLifecycleService.checkIn(reservation.getId()));
+            assertLifecycleConflict(() -> reservationLifecycleService.complete(reservation.getId()));
+            Reservation unchanged = reservations.findById(reservation.getId()).orElseThrow();
+            assertThat(unchanged.getStatus()).isEqualTo(terminalStatus);
+            assertThat(unchanged.getCheckedInAt()).isNull();
+            assertThat(unchanged.getCompletedAt()).isNull();
+        }
+    }
+
+    @Test
+    void extensionShapedOverlapsAreRejectedByBothDatabaseExclusionBarriers() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        Reservation first = confirmedReservation(UUID.randomUUID(), roomId, START, END);
+        Instant secondStart = END.plusSeconds(3_600);
+        Reservation second = confirmedReservation(UUID.randomUUID(), roomId, secondStart,
+                secondStart.plusSeconds(3_600));
+        Instant overlappingEnd = second.getEndAt().plusSeconds(300);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                UPDATE reservation
+                SET occupied_period = tstzrange(?::timestamptz, ?::timestamptz, '[)')
+                WHERE id = ?
+                """, Timestamp.from(first.getStartAt()), Timestamp.from(overlappingEnd), first.getId()))
+                .satisfies(error -> assertExclusionViolation(error, "ex_reservation_room_occupied_period"));
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                UPDATE reservation_occurrence
+                SET occupied_period = tstzrange(?::timestamptz, ?::timestamptz, '[)')
+                WHERE reservation_id = ?
+                """, Timestamp.from(first.getStartAt()), Timestamp.from(overlappingEnd), first.getId()))
+                .satisfies(error -> assertExclusionViolation(
+                        error, "ex_reservation_occurrence_room_occupied_period"));
+        Long reservationEnd = jdbcTemplate.queryForObject("""
+                SELECT EXTRACT(EPOCH FROM upper(occupied_period))::bigint
+                FROM reservation WHERE id = ?
+                """, Long.class, first.getId());
+        Long occurrenceEnd = jdbcTemplate.queryForObject("""
+                SELECT EXTRACT(EPOCH FROM upper(occupied_period))::bigint
+                FROM reservation_occurrence WHERE reservation_id = ?
+                """, Long.class, first.getId());
+        assertThat(Instant.ofEpochSecond(reservationEnd)).isEqualTo(END.plusSeconds(300));
+        assertThat(Instant.ofEpochSecond(occurrenceEnd)).isEqualTo(END.plusSeconds(300));
+        assertThat(second.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
+    }
+
+    @Test
+    void adjacentBufferedReservationRangesRemainValid() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        Reservation first = confirmedReservation(UUID.randomUUID(), roomId, START, END);
+        Instant secondStart = END.plusSeconds(300);
+
+        Reservation adjacent = confirmedReservation(UUID.randomUUID(), roomId, secondStart,
+                secondStart.plusSeconds(3_600));
+
+        assertThat(first.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(adjacent.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(adjacent.getId()))
+                .singleElement()
+                .satisfies(occurrence -> assertThat(occurrence.getStartAt()).isEqualTo(secondStart));
     }
 
     @Test
@@ -349,6 +571,52 @@ class BookingDecisionPostgresTests {
     }
 
     @Test
+    void concurrentRecurringConfirmationsCannotPartiallyOccupyTheSameSeriesDates() throws Exception {
+        UUID sharedRoomId = UUID.randomUUID();
+        BookingRequest firstRequest = pendingRecurringRequest(UUID.randomUUID(), sharedRoomId,
+                UUID.randomUUID(), START, END);
+        BookingRequest secondRequest = pendingRecurringRequest(UUID.randomUUID(), sharedRoomId,
+                UUID.randomUUID(), START, END);
+        CyclicBarrier ownerValidationBarrier = new CyclicBarrier(2);
+        when(authorizationClient.authorizeApproval(any(UUID.class), any(UUID.class)))
+                .thenAnswer(invocation -> new BookingAuthorizationResponse(
+                        UUID.randomUUID(), invocation.getArgument(0), "Trusted requester"));
+        doAnswer(invocation -> {
+            BookingRequestFacts facts = invocation.getArgument(0);
+            ownerValidationBarrier.await(10, TimeUnit.SECONDS);
+            Instant nextStart = facts.startsAt().plusSeconds(86_400);
+            return recurrenceReferences(facts, List.of(
+                    new SchedulingOccurrence(LocalDate.parse("2030-04-10"), facts.startsAt(), facts.endsAt()),
+                    new SchedulingOccurrence(LocalDate.parse("2030-04-11"), nextStart,
+                            facts.endsAt().plusSeconds(86_400))));
+        }).when(ownerServicesClient).validateRequest(any(BookingRequestFacts.class), eq(TOKEN), any(Instant.class));
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            Future<String> first = executor.submit(() -> approveRequest(decisionService, firstRequest, ready, start));
+            Future<String> second = executor.submit(() -> approveRequest(decisionService, secondRequest, ready, start));
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder("approved", "ROOM_OCCUPANCY_CONFLICT");
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(reservationsForRequest(firstRequest.getId())
+                + reservationsForRequest(secondRequest.getId())).isEqualTo(1);
+        assertThat(occurrencesForRequest(firstRequest.getId())
+                + occurrencesForRequest(secondRequest.getId())).isEqualTo(2);
+        assertThat(decisionsForRequest(firstRequest.getId())
+                + decisionsForRequest(secondRequest.getId())).isEqualTo(1);
+        assertThat(List.of(bookingRequests.findById(firstRequest.getId()).orElseThrow().getStatus(),
+                bookingRequests.findById(secondRequest.getId()).orElseThrow().getStatus()))
+                .containsExactlyInAnyOrder(BookingRequestStatus.APPROVED, BookingRequestStatus.PENDING_APPROVAL);
+    }
+
+    @Test
     void laterRecurrenceOccurrenceConflictIsRejectedWithoutPartialApproval() {
         UUID sharedRoomId = UUID.randomUUID();
         Instant secondDayStart = START.plusSeconds(86_400);
@@ -380,14 +648,46 @@ class BookingDecisionPostgresTests {
         assertThatThrownBy(() -> decisionService.decide(secondRequest.getId(),
                 new BookingDecisionRequest(ApprovalDecisionType.APPROVED, null)))
                 .isInstanceOf(DomainException.class)
-                .satisfies(exception -> assertThat(((DomainException) exception).code())
-                        .isEqualTo("ROOM_OCCUPANCY_CONFLICT"));
+                .satisfies(exception -> {
+                    DomainException domainException = (DomainException) exception;
+                    assertThat(domainException.code()).isEqualTo("ROOM_OCCUPANCY_CONFLICT");
+                    assertThat(domainException.getMessage()).contains("2030-04-11");
+                });
 
         assertThat(bookingRequests.findById(secondRequest.getId()).orElseThrow().getStatus())
                 .isEqualTo(BookingRequestStatus.PENDING_APPROVAL);
         assertThat(decisionsForRequest(secondRequest.getId())).isZero();
         assertThat(reservationsForRequest(secondRequest.getId())).isZero();
         assertThat(occurrencesForRequest(secondRequest.getId())).isZero();
+    }
+
+    @Test
+    void recurringApprovalPersistsTheWholeSeriesAndMeetingAtomically() {
+        BookingRequest request = pendingRecurringRequest(UUID.randomUUID(), UUID.randomUUID(),
+                UUID.randomUUID(), START, END);
+        configureAuthorization(request, UUID.randomUUID());
+        Instant secondStart = START.plusSeconds(86_400);
+        when(ownerServicesClient.validateRequest(any(BookingRequestFacts.class), eq(TOKEN), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    BookingRequestFacts facts = invocation.getArgument(0);
+                    return recurrenceReferences(facts, List.of(
+                            new SchedulingOccurrence(LocalDate.parse("2030-04-10"), facts.startsAt(), facts.endsAt()),
+                            new SchedulingOccurrence(LocalDate.parse("2030-04-11"), secondStart,
+                                    secondStart.plusSeconds(3_600))));
+                });
+
+        decisionService.decide(request.getId(),
+                new BookingDecisionRequest(ApprovalDecisionType.APPROVED, "series approved"));
+
+        assertThat(bookingRequests.findById(request.getId()).orElseThrow().getStatus())
+                .isEqualTo(BookingRequestStatus.APPROVED);
+        assertThat(decisionsForRequest(request.getId())).isEqualTo(1);
+        assertThat(reservationsForRequest(request.getId())).isEqualTo(1);
+        assertThat(meetingsForRequest(request.getId())).isEqualTo(1);
+        assertThat(participantsForRequest(request.getId())).isEqualTo(1);
+        assertThat(reservationOccurrences.findAllByBookingRequestId(request.getId()))
+                .extracting(ReservationOccurrence::getStartAt)
+                .containsExactly(START, secondStart);
     }
 
     @Test
@@ -444,6 +744,43 @@ class BookingDecisionPostgresTests {
                 recurrenceRuleId, "Test meeting", "Test agenda", startsAt, endsAt, 3, false,
                 BookingRequestStatus.PENDING_APPROVAL, null, Instant.now());
         return bookingRequests.saveAndFlush(request);
+    }
+
+    private Reservation confirmedReservation(UUID organizerId, UUID roomId, Instant startsAt, Instant endsAt)
+            throws SQLException {
+        BookingRequest request = pendingRequest(organizerId, roomId, startsAt, endsAt);
+        request.approve();
+        bookingRequests.saveAndFlush(request);
+        PGobject occupied = new PGobject();
+        occupied.setType("tstzrange");
+        occupied.setValue("[" + startsAt + "," + endsAt.plusSeconds(300) + ")");
+        Reservation reservation = reservations.saveAndFlush(new Reservation(request, roomId, organizerId, null, occupied,
+                startsAt, endsAt, 5, ReservationStatus.CONFIRMED, Instant.now()));
+        reservationOccurrences.saveAndFlush(new ReservationOccurrence(reservation, roomId, startsAt, endsAt, occupied));
+        return reservation;
+    }
+
+    private static void assertLifecycleConflict(
+            org.assertj.core.api.ThrowableAssert.ThrowingCallable operation) {
+        assertThatThrownBy(operation).isInstanceOf(DomainException.class)
+                .satisfies(error -> {
+                    DomainException exception = (DomainException) error;
+                    assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.code()).isEqualTo("RESERVATION_STATE_CONFLICT");
+                });
+    }
+
+    private static void assertExclusionViolation(Throwable failure, String constraintName) {
+        SQLException postgresException = null;
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sqlException) {
+                postgresException = sqlException;
+                break;
+            }
+        }
+        assertThat(postgresException != null).isTrue();
+        assertThat(postgresException.getSQLState()).isEqualTo("23P01");
+        assertThat(postgresException.getMessage()).contains(constraintName);
     }
 
     private void configureAuthorization(BookingRequest request, UUID actorId) {

@@ -17,6 +17,7 @@ public record BookingAuthorizationRequest(
         REQUEST_READ,
         DIRECT_CREATE,
         APPROVE,
+        RESERVATION_LIFECYCLE,
         CANCEL,
         EXTENSION_REQUEST,
         EXTENSION_DECIDE

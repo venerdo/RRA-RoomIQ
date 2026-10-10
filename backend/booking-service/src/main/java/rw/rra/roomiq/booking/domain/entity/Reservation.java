@@ -52,6 +52,9 @@ public class Reservation extends BookingEntity {
     @Column(name = "checked_in_at")
     private Instant checkedInAt;
 
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
     @Version
     @Column(nullable = false)
     private int version;
@@ -87,6 +90,26 @@ public class Reservation extends BookingEntity {
     public int getReleaseBufferMinutes() { return releaseBufferMinutes; }
     public ReservationStatus getStatus() { return status; }
     public Instant getCheckedInAt() { return checkedInAt; }
+    public Instant getCompletedAt() { return completedAt; }
     public int getVersion() { return version; }
     public Instant getCreatedAt() { return createdAt; }
+
+    public boolean checkIn(Instant at) {
+        if (at == null || status != ReservationStatus.CONFIRMED || checkedInAt != null || completedAt != null) {
+            return false;
+        }
+        checkedInAt = at;
+        status = ReservationStatus.IN_PROGRESS;
+        return true;
+    }
+
+    public boolean complete(Instant at) {
+        if (at == null || status != ReservationStatus.IN_PROGRESS || checkedInAt == null
+                || completedAt != null || at.isBefore(checkedInAt)) {
+            return false;
+        }
+        completedAt = at;
+        status = ReservationStatus.COMPLETED;
+        return true;
+    }
 }

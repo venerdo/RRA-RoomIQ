@@ -60,6 +60,8 @@ public class OrganizationAuthorizationController {
             case DIRECT_CREATE -> false;
             case APPROVE -> authorization.canApproveBooking(authentication,
                     request.resourceOwnerUserId(), request.buildingId());
+            case RESERVATION_LIFECYCLE -> authorization.canManageBookingLifecycle(authentication,
+                    request.resourceOwnerUserId(), request.departmentId(), request.buildingId());
             case CANCEL -> authorization.canCancelBooking(authentication,
                     request.resourceOwnerUserId(), request.buildingId());
             case EXTENSION_REQUEST -> authorization.canRequestBookingExtension(authentication,
@@ -72,7 +74,7 @@ public class OrganizationAuthorizationController {
             throw new AccessDeniedException("Booking access is denied");
         }
         UUID resourceOwnerUserId = switch (request.action()) {
-            case APPROVE -> request.resourceOwnerUserId();
+            case APPROVE, RESERVATION_LIFECYCLE -> request.resourceOwnerUserId();
             case DIRECT_CREATE -> actorUserId;
             default -> null;
         };

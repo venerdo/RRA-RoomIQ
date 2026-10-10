@@ -3,7 +3,7 @@
   "project": "RRA RoomIQ",
   "stage": "Stage 6",
   "status": "stage-6-in-progress",
-  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-04 are implemented. Booking exposes protected request create/list/get, draft-submit, and decision operations; Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Approval revalidates current owner policy and occupancy, then atomically persists the decision, reservation, private meeting, and requester organizer participant. Rejection creates no reservation or meeting. Cancellation and remaining Booking workflows are reserved for their later requirements. The recurring-series conflict policy is all-or-nothing.",
+  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-07 are implemented. Booking exposes protected request create/list/get, draft-submit, decision, direct-booking, check-in, and completion operations. Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Approval revalidates current owner policy and occupancy, then atomically persists the decision, reservation, private meeting, and requester organizer participant. Rejection creates no reservation or meeting. Reservation lifecycle changes use current Identity authorization, persisted organizer/building/department facts, row locks, and server-generated timestamps. The user approved nullable reservation.completed_at, required iff status is COMPLETED, and Flyway V3 enforces that integrity. Cancellation and remaining Booking workflows are reserved for later requirements. The recurring-series conflict policy is all-or-nothing.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -1045,9 +1045,9 @@
       "S6-02": "complete",
       "S6-03": "complete",
       "S6-04": "complete",
-      "S6-05": "in-progress",
-      "S6-06": "not-started",
-      "S6-07": "not-started",
+      "S6-05": "complete",
+      "S6-06": "complete",
+      "S6-07": "complete",
       "S6-08": "not-started",
       "S6-09": "not-started",
       "S6-10": "not-started",
@@ -1069,13 +1069,13 @@
     ],
     "verification": {
       "focusedBookingPostgreSql": {
-        "passed": 14,
+        "passed": 9,
         "failed": 0,
         "errors": 0,
         "skipped": 0
       },
       "identityService": {
-        "passed": 45,
+        "passed": 47,
         "failed": 0,
         "errors": 0,
         "skipped": 0
@@ -1088,26 +1088,80 @@
       },
       "fullBackendReactor": {
         "modules": 11,
-        "passed": 214,
+        "passed": 225,
         "failed": 0,
         "errors": 0,
         "skipped": 0
       },
       "bookingAuthorizationFocused": {
-        "passed": 7,
+        "passed": 13,
         "failed": 0,
         "errors": 0,
         "skipped": 0
       },
       "bookingModuleSuite": {
-        "passed": 49,
+        "passed": 58,
         "failed": 0,
         "errors": 0,
         "skipped": 0
+      },
+      "focusedS6-05": {
+        "passed": 49,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "includes": [
+          "Booking direct request and controller",
+          "Booking authorization guard",
+          "Booking decision and PostgreSQL conflict",
+          "Booking owner client",
+          "Scheduling constraint API",
+          "Identity booking authorization"
+        ]
+      },
+      "focusedS6-07": {
+        "passed": 37,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "coverage": [
+          "BookingDecisionPostgresTests",
+          "ReservationLifecycleControllerTests",
+          "BookingAuthorizationClientTests",
+          "BookingServiceApplicationTests",
+          "reservation state transitions",
+          "server-generated lifecycle timestamps",
+          "authorization and persisted scope",
+          "terminal-state handling",
+          "concurrent confirmation",
+          "buffered exclusion constraints",
+          "adjacent buffered range acceptance"
+        ]
+      },
+      "fullS6-07Regressions": {
+        "identityService": {
+          "passed": 48,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "commonWeb": {
+          "passed": 6,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "fullBackendReactor": {
+          "projects": 11,
+          "passed": 244,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        }
       }
     },
     "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
-    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, and POST /api/v1/bookings/direct. Every operation requires bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The direct flow uses the approved reservation_occurrence model and is pending final regression verification. Cancellation, extension, share-link, and occupancy-provider routes are not exposed.",
+    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, POST /api/v1/bookings/direct, POST /api/v1/reservations/{reservationId}/check-in, and POST /api/v1/reservations/{reservationId}/complete. Every operation requires bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The direct and recurring flows use the approved reservation_occurrence model. Cancellation, extension, share-link, and occupancy-provider routes are not exposed.",
     "decisionOperation": {
       "method": "POST",
       "path": "/api/v1/booking-requests/{id}/decision",
@@ -1190,7 +1244,7 @@
         "immediateConfirmation": "When approvalRequired=false, Booking revalidates current owner-service inputs and atomically creates the confirmed series reservation, every validated buffered occurrence, a private meeting, and the Identity-derived requester as organizer."
       },
       "approvalPolicy": "The active Room Rule applies consistently to Admin, Super Admin, and eligible Secretary initiators. Self-approval remains denied for every role. Secretary Normal/VIP eligibility is evaluated by Identity from current permissions, department/building scope, and active CG_BOOKING privilege; room class is read from Room, never trusted from the caller.",
-      "recurrenceAndConcurrency": "Scheduling supplies bounded, ordered occurrence Instants in the selected IANA timezone after evaluating date/count limits and timezone transitions. Booking rejects incomplete/inconsistent sets, applies the configured release buffer to each half-open interval, persists occurrence rows atomically, and relies on the PostgreSQL GiST exclusion constraint as the concurrent room-conflict barrier. Any occurrence conflict rolls back the complete series.",
+      "recurrenceAndConcurrency": "Scheduling supplies bounded, ordered occurrence Instants from the stored RRULE in the selected IANA timezone after evaluating its one-year/365-date limits and timezone transitions. Booking verifies calendar/rule/timezone metadata and each date/time interval, then checks every occurrence against Scheduling constraints, its effective Room rule, Room's protected maintenance-period owner API, and Booking-owned occupancy before writes. If any effective occurrence rule requires approval, the whole series follows the existing pending-approval workflow; the maximum effective release buffer is applied to every interval. Successful acceptance atomically persists one series-level reservation, one reservation_occurrence per evaluated date, and the meeting data. Any validation conflict prevents writes; Booking occupancy conflicts report local occurrence dates in the ROOM_OCCUPANCY_CONFLICT message, while scheduling and maintenance conflicts retain their stable owner-policy errors. PostgreSQL exclusion violations or deadlocks during overlapping writes are normalized to ROOM_OCCUPANCY_CONFLICT with the affected date, and the transaction rolls back the full series.",
       "stableErrors": [
         "ACCESS_DENIED",
         "AUTHENTICATION_REQUIRED",
@@ -1199,11 +1253,56 @@
         "BOOKING_SELF_APPROVAL_DENIED",
         "IDEMPOTENCY_KEY_CONFLICT",
         "IDENTITY_AUTHORIZATION_INCONSISTENT",
+        "ROOM_BOOKING_POLICY_UNAVAILABLE",
+        "ROOM_MAINTENANCE_CONFLICT",
         "ROOM_OCCUPANCY_CONFLICT",
-        "SCHEDULING_CONSTRAINTS_INVALID"
+        "ROOM_SERVICE_UNAVAILABLE",
+        "SCHEDULING_CONSTRAINTS_INVALID",
+        "SCHEDULING_SERVICE_UNAVAILABLE"
       ]
     },
-    "erdOrRequirementsChanges": "The user explicitly approved the reservation_occurrence table extension in RRA_RoomIQ_ERD_v2.mmd and Booking Flyway V2 before implementation. No further ERD or SRS changes have been made."
+    "reservationLifecycleOperation": {
+      "methods": [
+        {
+          "method": "POST",
+          "path": "/api/v1/reservations/{reservationId}/check-in",
+          "httpStatus": 200,
+          "transition": "CONFIRMED → IN_PROGRESS",
+          "serverTimestamp": "checkedInAt"
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/reservations/{reservationId}/complete",
+          "httpStatus": 200,
+          "transition": "IN_PROGRESS → COMPLETED",
+          "serverTimestamp": "completedAt"
+        }
+      ],
+      "authenticationAndAuthorization": "Protected by the Booking bearer/Identity guard. Identity authorizes the current organizer only when current building and department match persisted reservation facts, a scoped lifecycle manager only in the assigned building, or a global IDENTITY_SYSTEM_ADMIN. Booking forwards the caller token and verifies the returned actor matches the persisted organizer.",
+      "request": "No request body fields are used. Caller-supplied actor IDs and timestamps cannot select lifecycle identity or time.",
+      "response": {
+        "envelope": "ApiResponse<ReservationLifecycleResponse>",
+        "dataFields": [
+          "reservationId",
+          "status",
+          "checkedInAt",
+          "completedAt"
+        ]
+      },
+      "persistence": "Transitions lock the persisted reservation and commit status and server-generated UTC timestamp atomically. Only CONFIRMED → IN_PROGRESS → COMPLETED is permitted; CANCELLED and RELEASED are terminal. No automatic missed-check-in or overdue status transition/release is implemented.",
+      "schemaChange": "The user explicitly approved nullable reservation.completed_at TIMESTAMP WITH TIME ZONE, required iff status is COMPLETED. Booking Flyway V3 adds the column and check constraint; RRA_RoomIQ_ERD_v2.mmd reflects the field.",
+      "occupancyIntegrity": "Existing buffered half-open occupied_period ranges and PostgreSQL GiST exclusion constraints on reservation and reservation_occurrence remain unchanged. Tests cover concurrent overlapping confirmations and extension-shaped range updates; no extension API is implemented by S6-07.",
+      "stableErrors": [
+        "ACCESS_DENIED",
+        "AUTHENTICATION_REQUIRED",
+        "IDENTITY_AUTHORIZATION_UNAVAILABLE",
+        "RESERVATION_ID_INVALID",
+        "RESERVATION_NOT_FOUND",
+        "RESERVATION_STATE_CONFLICT"
+      ],
+      "gateway": "No Booking API Gateway route is configured."
+    },
+    "erdOrRequirementsChanges": "The user explicitly approved the reservation_occurrence extension and nullable reservation.completed_at (required iff status is COMPLETED). The former is implemented in Booking Flyway V2 and the ERD; the latter is implemented in Flyway V3 and the ERD."
   },
   "schedulingApiExposurePolicy": {
     "businessRoutes": "/api/v1/**",
@@ -1220,11 +1319,14 @@
       "GET /api/v1/booking-requests/{id}",
       "POST /api/v1/booking-requests/{id}/submit",
       "POST /api/v1/booking-requests/{id}/decision",
-      "POST /api/v1/bookings/direct"
+      "POST /api/v1/bookings/direct",
+      "POST /api/v1/reservations/{reservationId}/check-in",
+      "POST /api/v1/reservations/{reservationId}/complete"
     ],
-    "authenticationAndAuthorization": "Every route requires a bearer token and current Identity authorization. Create/submit/direct-create enforce current requester or direct-booking authority, department/building scope, and VIP privilege when applicable; list/get enforce requester or scoped reviewer access. Direct create resolves Identity authority before owner-data reads and rechecks VIP eligibility after Room identifies a VIP room.",
-    "ownerServices": "Create, submit, direct-create, and confirmation forward the caller token to Identity, Organization, Room, and Scheduling APIs as applicable. Current building, department, room status/capacity/rules, calendar/timezone, recurrence, working windows, holidays, closures, and occupancy are validated before writes; confirmation revalidates authoritative inputs. Missing, denied, inconsistent, or unavailable owner data fails closed.",
+    "authenticationAndAuthorization": "Every route requires a bearer token and current Identity authorization. Create/submit/direct-create enforce current requester or direct-booking authority, department/building scope, and VIP privilege when applicable; list/get enforce requester or scoped reviewer access; decision and lifecycle operations revalidate the persisted resource owner and scope. Direct create resolves Identity authority before owner-data reads and rechecks VIP eligibility after Room identifies a VIP room.",
+    "ownerServices": "Create, submit, direct-create, and confirmation forward the caller token to Identity, Organization, Room, and Scheduling APIs as applicable. Current building, department, room status/capacity/rules, calendar/timezone, stored recurrence, working windows, holidays, closures, every occurrence's Room maintenance periods, and Booking-owned occupancy are validated before writes; confirmation revalidates authoritative inputs. Booking checks maintenance response room identity and range shape. Missing, denied, inconsistent, malformed, or unavailable owner data fails closed.",
     "requestLifecycle": "Create stores a validated DRAFT. POST /api/v1/booking-requests/{id}/submit is requester-only, locks the draft, revalidates current owner and Identity policies, and transitions to PENDING_APPROVAL. POST /api/v1/booking-requests/{id}/decision permits an authorized scoped approver to approve or reject only a pending request; self-approval is denied. Approval revalidates current policy and occupancy and atomically creates a confirmed reservation, private meeting, and accepted requester organizer participant. Rejection creates no reservation or meeting. POST /api/v1/bookings/direct creates a normal pending request whenever the active Room Rule requires approval, regardless of whether the initiator is Admin, Super Admin, or eligible Secretary; no reservation or meeting exists until a different authorized reviewer approves. If the policy does not require approval, it confirms atomically. No policy-inferred or implicit auto-confirm occurs.",
+    "reservationLifecycle": "POST /api/v1/reservations/{reservationId}/check-in and /complete are bearer-protected and Identity-authorized. Identity validates the current organizer's persisted building/department scope, assigned building lifecycle-manager permission, or global system-admin authority. The routes accept no caller timestamp or actor; the server sets checkedInAt and completedAt. Row locking allows only CONFIRMED → IN_PROGRESS → COMPLETED; CANCELLED and RELEASED cannot reenter the lifecycle. Flyway V3 enforces completed_at iff status is COMPLETED. No automatic missed-check-in/overdue transition or release is implemented.",
     "callerControlledFields": "Requester identity, request type, status, approval outcome, and organizational authorization are derived from persisted data, Identity, and owner services, not caller-supplied payload fields.",
     "gateway": "No Booking route is configured on the API Gateway; publication and routing remain deferred to Stage 11.",
     "futureWorkflows": "Cancellation, extensions, share links, and the Booking occupancy provider are not exposed."

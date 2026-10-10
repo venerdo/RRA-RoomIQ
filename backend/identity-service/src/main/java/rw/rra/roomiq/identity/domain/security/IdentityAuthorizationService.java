@@ -1,6 +1,5 @@
 package rw.rra.roomiq.identity.domain.security;
 
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -33,6 +32,8 @@ import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.BOO
 import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.BOOKING_DIRECT_CREATE;
 import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.BOOKING_EXTENSION_DECIDE;
 import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.BOOKING_EXTENSION_REQUEST;
+import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.BOOKING_LIFECYCLE_MANAGE;
+import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.BOOKING_LIFECYCLE_OWN;
 import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.BOOKING_REQUEST_CREATE;
 import static rw.rra.roomiq.identity.domain.security.IdentityPermissionCodes.ROOM_MANAGE;
 
@@ -469,6 +470,26 @@ public class IdentityAuthorizationService {
             return hasPermission(authentication, actorId, BOOKING_CANCEL_OWN, buildingId);
         }
         return hasPermission(authentication, actorId, BOOKING_CANCEL, buildingId);
+    }
+
+    public boolean canManageBookingLifecycle(Authentication authentication, UUID organizerUserId,
+                                              UUID departmentId, UUID buildingId) {
+        UUID actorId = actorId(authentication);
+        if (actorId == null || !isActive(actorId) || organizerUserId == null || departmentId == null
+                || buildingId == null) {
+            return false;
+        }
+        if (hasGlobalPermission(authentication, actorId)
+                || hasPermission(authentication, actorId, BOOKING_LIFECYCLE_MANAGE, buildingId)) {
+            return true;
+        }
+        if (!actorId.equals(organizerUserId)) {
+            return false;
+        }
+        AppUser user = users.findById(actorId).orElse(null);
+        return user != null && departmentId.equals(user.getDepartmentId())
+                && buildingId.equals(user.getOfficeBuildingId())
+                && hasPermission(authentication, actorId, BOOKING_LIFECYCLE_OWN, buildingId);
     }
 
     public boolean canRequestBookingExtension(Authentication authentication, UUID requesterUserId,

@@ -24,6 +24,7 @@ import rw.rra.roomiq.booking.domain.entity.Meeting;
 import rw.rra.roomiq.booking.domain.entity.MeetingParticipant;
 import rw.rra.roomiq.booking.domain.entity.MeetingShareLink;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
+import rw.rra.roomiq.booking.domain.entity.ReservationOccurrence;
 import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
 import rw.rra.roomiq.booking.domain.enums.BookingExtensionStatus;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestStatus;
@@ -41,6 +42,7 @@ import rw.rra.roomiq.booking.domain.repository.MeetingParticipantRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingShareLinkRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationRepository;
+import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -94,6 +96,9 @@ class BookingServiceApplicationTests {
     private ReservationRepository reservationRepository;
 
     @Autowired
+    private ReservationOccurrenceRepository reservationOccurrenceRepository;
+
+    @Autowired
     private MeetingRepository meetingRepository;
 
     @Autowired
@@ -124,7 +129,9 @@ class BookingServiceApplicationTests {
                 "/api/v1/booking-requests/{id}/submit",
                 "/api/v1/booking-requests/{id}/decision",
                 "/api/v1/booking-requests/{id}",
-                "/api/v1/bookings/direct");
+                "/api/v1/bookings/direct",
+                "/api/v1/reservations/{reservationId}/check-in",
+                "/api/v1/reservations/{reservationId}/complete");
     }
 
     @Test
@@ -133,8 +140,15 @@ class BookingServiceApplicationTests {
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '1' AND success = TRUE",
                 Integer.class)).isEqualTo(1);
         assertThat(tableNames()).contains("booking_request", "approval_decision", "reservation", "meeting",
-                "meeting_participant", "meeting_share_link", "booking_extension", "cancellation")
+                "meeting_participant", "meeting_share_link", "booking_extension", "cancellation",
+                "reservation_occurrence")
                 .doesNotContain("room", "app_user", "office_building", "recurrence_rule");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '2' AND success = TRUE",
+                Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '3' AND success = TRUE",
+                Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM pg_constraint
                 WHERE conname IN ('ck_booking_request_type', 'ck_booking_request_status',
@@ -143,11 +157,16 @@ class BookingServiceApplicationTests {
                     'ck_meeting_visibility', 'ck_meeting_participant_identity',
                     'ck_meeting_participant_role', 'ck_meeting_participant_invite_status',
                     'ck_booking_extension_status', 'ck_booking_extension_requested_end',
-                    'ck_cancellation_reason_code', 'ck_cancellation_override_reason')
-                """, Integer.class)).isEqualTo(14);
+                    'ck_cancellation_reason_code', 'ck_cancellation_override_reason',
+                    'ck_reservation_completed_at_status')
+                """, Integer.class)).isEqualTo(15);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM pg_constraint
                 WHERE conname = 'ex_reservation_room_occupied_period' AND contype = 'x'
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM pg_constraint
+                WHERE conname = 'ex_reservation_occurrence_room_occupied_period' AND contype = 'x'
                 """, Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM pg_extension WHERE extname = 'btree_gist'", Integer.class)).isEqualTo(1);
@@ -172,6 +191,7 @@ class BookingServiceApplicationTests {
         assertThat(importedForeignKeyColumns("booking_extension")).containsExactly("reservation_id");
         assertThat(importedForeignKeyColumns("cancellation"))
                 .containsExactlyInAnyOrder("booking_request_id", "reservation_id");
+        assertThat(importedForeignKeyColumns("reservation_occurrence")).containsExactly("reservation_id");
     }
 
     @Test
@@ -180,7 +200,8 @@ class BookingServiceApplicationTests {
         assertThat(entityManagerFactory.getMetamodel().getEntities())
                 .extracting(entityType -> entityType.getJavaType().getSimpleName())
                 .containsExactlyInAnyOrder("BookingRequest", "ApprovalDecision", "Reservation", "Meeting",
-                        "MeetingParticipant", "MeetingShareLink", "BookingExtension", "Cancellation");
+                        "MeetingParticipant", "MeetingShareLink", "BookingExtension", "Cancellation",
+                        "ReservationOccurrence");
 
         Instant start = Instant.parse("2026-11-07T10:00:00Z");
         Instant end = Instant.parse("2026-11-07T11:00:00Z");
@@ -204,6 +225,11 @@ class BookingServiceApplicationTests {
         Reservation reservation = reservationRepository.saveAndFlush(new Reservation(
                 request, roomId, requesterId, recurrenceRuleId, occupiedPeriod, start, end, 5,
                 ReservationStatus.CONFIRMED, start.minusSeconds(900)));
+        PGobject occurrencePeriod = new PGobject();
+        occurrencePeriod.setType("tstzrange");
+        occurrencePeriod.setValue("[2026-11-07T10:00:00Z,2026-11-07T11:05:00Z)");
+        ReservationOccurrence occurrence = reservationOccurrenceRepository.saveAndFlush(
+                new ReservationOccurrence(reservation, roomId, start, end, occurrencePeriod));
         Meeting meeting = meetingRepository.saveAndFlush(new Meeting(
                 reservation, "Project review", "Agenda", "Organizer", "Bring status notes",
                 "organizer@example.test", MeetingVisibility.INTERNAL, start.minusSeconds(900)));
@@ -226,6 +252,12 @@ class BookingServiceApplicationTests {
         Reservation reloadedReservation = reservationRepository.findById(reservation.getId()).orElseThrow();
         assertThat(reloadedReservation.getOccupiedPeriod().getType()).isEqualTo("tstzrange");
         assertThat(reloadedReservation.getReleaseBufferMinutes()).isEqualTo(5);
+        ReservationOccurrence reloadedOccurrence =
+                reservationOccurrenceRepository.findById(occurrence.getId()).orElseThrow();
+        assertThat(reloadedOccurrence.getReservation().getId()).isEqualTo(reservation.getId());
+        assertThat(reloadedOccurrence.getStartAt()).isEqualTo(start);
+        assertThat(reloadedOccurrence.getEndAt()).isEqualTo(end);
+        assertThat(reloadedOccurrence.getOccupiedPeriod().getType()).isEqualTo("tstzrange");
         assertThat(meetingRepository.findById(meeting.getId()).orElseThrow()
                 .getReservation().getId()).isEqualTo(reservation.getId());
         assertThat(meetingParticipantRepository.findById(participant.getId()).orElseThrow()

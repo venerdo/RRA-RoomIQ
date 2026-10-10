@@ -84,6 +84,10 @@ class BookingOwnerServicesClientTests {
                          "occurrencesEvaluated":1,"occurrenceIntervals":[
                           {"occurrenceDate":"2026-10-10","startsAt":"%s","endsAt":"%s"}]}}
                         """.formatted(calendarId, startsAt, endsAt), MediaType.APPLICATION_JSON));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/maintenance-periods",
+                """
+                {"success":true,"message":"ok","data":[]}
+                """);
 
         var result = client.validateRequest(facts(), TOKEN, Instant.parse("2026-10-09T12:00:00Z"));
 
@@ -97,6 +101,141 @@ class BookingOwnerServicesClientTests {
         assertThat(result.occurrences()).containsExactly(
                 new BookingOwnerServicesClient.SchedulingOccurrence(
                         java.time.LocalDate.parse("2026-10-10"), startsAt, endsAt));
+    }
+
+    @Test
+    void validatesEachRecurringOccurrenceAgainstItsEffectiveRoomRuleAndTimezone() {
+        UUID recurrenceRuleId = UUID.randomUUID();
+        Instant secondStart = startsAt.plusSeconds(86_400);
+        Instant secondEnd = endsAt.plusSeconds(86_400);
+        expectBaseOwnerData("""
+                [{"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":5,"maxAdvanceDays":90,
+                  "cancellationDeadlineMinutes":null,"recurringAllowed":true,
+                  "externalGuestsAllowed":true,"approvalRequired":false,"outsideHoursAllowed":false,
+                  "releaseBufferMinutes":5,"active":true,"effectiveFrom":null,
+                  "allowedDepartmentIds":["%s"]},
+                 {"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":5,"maxAdvanceDays":90,
+                  "cancellationDeadlineMinutes":null,"recurringAllowed":true,
+                  "externalGuestsAllowed":true,"approvalRequired":true,"outsideHoursAllowed":false,
+                  "releaseBufferMinutes":20,"active":true,"effectiveFrom":"2026-10-11T00:00:00Z",
+                  "allowedDepartmentIds":["%s"]}]
+                """.formatted(UUID.randomUUID(), roomId, departmentId,
+                UUID.randomUUID(), roomId, departmentId));
+        expectScheduling(recurrenceRuleId, """
+                {"workingCalendarId":"%s","recurrenceRuleId":"%s","timezone":"Africa/Kigali","valid":true,
+                 "occurrencesEvaluated":2,"violations":[],"occurrenceIntervals":[
+                  {"occurrenceDate":"2026-10-10","startsAt":"%s","endsAt":"%s"},
+                  {"occurrenceDate":"2026-10-11","startsAt":"%s","endsAt":"%s"}]}
+                """.formatted(calendarId, recurrenceRuleId, startsAt, endsAt, secondStart, secondEnd));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/maintenance-periods",
+                """
+                {"success":true,"message":"ok","data":[]}
+                """);
+
+        var result = client.validateRequest(new BookingRequestFacts(departmentId, roomId, buildingId,
+                recurrenceRuleId, startsAt, endsAt, 5, false), TOKEN,
+                Instant.parse("2026-10-09T12:00:00Z"));
+
+        assertThat(result.occurrences()).hasSize(2);
+        assertThat(result.approvalRequired()).isTrue();
+        assertThat(result.releaseBufferMinutes()).isEqualTo(20);
+    }
+
+    @Test
+    void rejectsMaintenanceThatOverlapsAnyOccurrenceIncludingItsReleaseBuffer() {
+        UUID recurrenceRuleId = UUID.randomUUID();
+        Instant secondStart = startsAt.plusSeconds(86_400);
+        Instant secondEnd = endsAt.plusSeconds(86_400);
+        expectBaseOwnerData("""
+                [{"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":5,"maxAdvanceDays":90,
+                  "cancellationDeadlineMinutes":null,"recurringAllowed":true,
+                  "externalGuestsAllowed":true,"approvalRequired":false,"outsideHoursAllowed":false,
+                  "releaseBufferMinutes":5,"active":true,"effectiveFrom":null,
+                  "allowedDepartmentIds":["%s"]}]
+                """.formatted(UUID.randomUUID(), roomId, departmentId));
+        expectScheduling(recurrenceRuleId, """
+                {"workingCalendarId":"%s","recurrenceRuleId":"%s","timezone":"Africa/Kigali","valid":true,
+                 "occurrencesEvaluated":2,"violations":[],"occurrenceIntervals":[
+                  {"occurrenceDate":"2026-10-10","startsAt":"%s","endsAt":"%s"},
+                  {"occurrenceDate":"2026-10-11","startsAt":"%s","endsAt":"%s"}]}
+                """.formatted(calendarId, recurrenceRuleId, startsAt, endsAt, secondStart, secondEnd));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/maintenance-periods",
+                """
+                {"success":true,"message":"ok","data":[{"id":"%s","roomId":"%s",
+                 "period":"[2026-10-11T10:30:00Z,2026-10-11T10:45:00Z)","reason":null,
+                 "createdByUserId":null}]}
+                """.formatted(UUID.randomUUID(), roomId));
+
+        assertThatThrownBy(() -> client.validateRequest(new BookingRequestFacts(departmentId, roomId, buildingId,
+                recurrenceRuleId, startsAt, endsAt, 5, false), TOKEN,
+                Instant.parse("2026-10-09T12:00:00Z")))
+                .isInstanceOf(DomainException.class)
+                .satisfies(exception -> {
+                    DomainException domainException = (DomainException) exception;
+                    assertThat(domainException.code()).isEqualTo("ROOM_MAINTENANCE_CONFLICT");
+                    assertThat(domainException.getMessage()).contains("2026-10-11");
+                });
+    }
+
+    @Test
+    void returnsSchedulingViolationsScopedToEachOccurrence() {
+        expectBaseOwnerData("""
+                [{"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":5,"maxAdvanceDays":90,
+                  "cancellationDeadlineMinutes":null,"recurringAllowed":true,
+                  "externalGuestsAllowed":true,"approvalRequired":false,"outsideHoursAllowed":false,
+                  "releaseBufferMinutes":5,"active":true,"effectiveFrom":null,
+                  "allowedDepartmentIds":["%s"]}]
+                """.formatted(UUID.randomUUID(), roomId, departmentId));
+        expectScheduling(null, """
+                {"workingCalendarId":"%s","recurrenceRuleId":null,"timezone":"Africa/Kigali","valid":false,
+                 "occurrencesEvaluated":2,"violations":[
+                  {"occurrenceDate":"2026-10-10","code":"BLOCKING_HOLIDAY","message":"Holiday"},
+                  {"occurrenceDate":"2026-10-11","code":"BLOCKING_CLOSURE","message":"Closure"}],
+                 "occurrenceIntervals":[]}
+                """.formatted(calendarId));
+
+        assertThatThrownBy(() -> client.validateRequest(facts(), TOKEN,
+                Instant.parse("2026-10-09T12:00:00Z")))
+                .isInstanceOf(DomainException.class)
+                .satisfies(exception -> {
+                    DomainException domainException = (DomainException) exception;
+                    assertThat(domainException.code()).isEqualTo("SCHEDULING_CONSTRAINTS_INVALID");
+                    assertThat(domainException.getMessage())
+                            .contains("2026-10-10:BLOCKING_HOLIDAY", "2026-10-11:BLOCKING_CLOSURE");
+                });
+    }
+
+    @Test
+    void rejectsMaintenanceDataForAnotherRoom() {
+        expectBaseOwnerData("""
+                [{"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":5,"maxAdvanceDays":90,
+                  "cancellationDeadlineMinutes":null,"recurringAllowed":true,
+                  "externalGuestsAllowed":true,"approvalRequired":false,"outsideHoursAllowed":false,
+                  "releaseBufferMinutes":5,"active":true,"effectiveFrom":null,
+                  "allowedDepartmentIds":["%s"]}]
+                """.formatted(UUID.randomUUID(), roomId, departmentId));
+        expectScheduling(null, """
+                {"workingCalendarId":"%s","recurrenceRuleId":null,"timezone":"Africa/Kigali","valid":true,
+                 "occurrencesEvaluated":1,"violations":[],"occurrenceIntervals":[
+                  {"occurrenceDate":"2026-10-10","startsAt":"%s","endsAt":"%s"}]}
+                """.formatted(calendarId, startsAt, endsAt));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/maintenance-periods",
+                """
+                {"success":true,"message":"ok","data":[{"id":"%s","roomId":"%s",
+                 "period":"[2026-10-11T10:30:00Z,2026-10-11T10:45:00Z)","reason":null,
+                 "createdByUserId":null}]}
+                """.formatted(UUID.randomUUID(), UUID.randomUUID()));
+
+        assertThatThrownBy(() -> client.validateRequest(facts(), TOKEN,
+                Instant.parse("2026-10-09T12:00:00Z")))
+                .isInstanceOf(DomainException.class)
+                .satisfies(exception -> assertThat(((DomainException) exception).code())
+                        .isEqualTo("ROOM_SERVICE_UNAVAILABLE"));
     }
 
     @Test
@@ -123,6 +262,45 @@ class BookingOwnerServicesClientTests {
                 .andExpect(method(GET))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, TOKEN))
                 .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+    }
+
+    private void expectBaseOwnerData(String roomRules) {
+        expectGet(ORGANIZATION_URL, "/api/v1/office-buildings/" + buildingId,
+                """
+                {"success":true,"message":"ok","data":{"id":"%s","active":true,
+                 "timezone":"Africa/Kigali","workingCalendarId":"%s"}}
+                """.formatted(buildingId, calendarId));
+        expectGet(ORGANIZATION_URL, "/api/v1/departments/" + departmentId,
+                """
+                {"success":true,"message":"ok","data":{"id":"%s","officeBuildingId":"%s","status":"ACTIVE"}}
+                """.formatted(departmentId, buildingId));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId,
+                """
+                {"success":true,"message":"ok","data":{"id":"%s","officeBuildingId":"%s","capacity":12,
+                 "roomClass":"STANDARD","status":"AVAILABLE","deletedAt":null}}
+                """.formatted(roomId, buildingId));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/rules",
+                """
+                {"success":true,"message":"ok","data":%s}
+                """.formatted(roomRules));
+        expectGet(ROOM_URL, "/api/v1/office-buildings/" + buildingId + "/room-rules",
+                """
+                {"success":true,"message":"ok","data":[]}
+                """);
+    }
+
+    private void expectScheduling(UUID recurrenceRuleId, String response) {
+        server.expect(requestTo(SCHEDULING_URL + "/api/v1/scheduling-constraints/validate"))
+                .andExpect(method(POST))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, TOKEN))
+                .andExpect(content().json("""
+                        {"workingCalendarId":"%s","officeBuildingId":"%s","startsAt":"%s",
+                         "endsAt":"%s","timezone":"Africa/Kigali","recurrenceRuleId":%s}
+                        """.formatted(calendarId, buildingId, startsAt, endsAt,
+                        recurrenceRuleId == null ? "null" : "\"" + recurrenceRuleId + "\"")))
+                .andRespond(withSuccess("""
+                        {"success":true,"message":"ok","data":%s}
+                        """.formatted(response), MediaType.APPLICATION_JSON));
     }
 
     private BookingRequestFacts facts() {

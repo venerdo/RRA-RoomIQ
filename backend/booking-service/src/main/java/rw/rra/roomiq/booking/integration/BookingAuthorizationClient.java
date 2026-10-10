@@ -53,6 +53,16 @@ public class BookingAuthorizationClient {
                 new BookingAuthorizationRequest(Action.APPROVE, buildingId, null, requesterUserId, null));
     }
 
+    public UUID authorizeReservationLifecycle(UUID organizerUserId, UUID departmentId, UUID buildingId) {
+        BookingAuthorizationResponse response = authorizeResponse(currentAuthorization(),
+                new BookingAuthorizationRequest(Action.RESERVATION_LIFECYCLE, buildingId, departmentId,
+                        organizerUserId, null));
+        if (!organizerUserId.equals(response.resourceOwnerUserId())) {
+            throw unavailable();
+        }
+        return response.actorUserId();
+    }
+
     public BookingAuthorizationResponse authorizeDirectBooking(UUID buildingId, UUID departmentId,
                                                                boolean vipRoom) {
         BookingAuthorizationResponse response = authorizeResponse(currentAuthorization(),

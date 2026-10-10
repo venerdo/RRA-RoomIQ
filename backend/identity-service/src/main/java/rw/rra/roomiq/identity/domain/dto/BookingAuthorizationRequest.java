@@ -29,6 +29,8 @@ public record BookingAuthorizationRequest(
                     && departmentId == null && vipRoom == null;
             case DIRECT_CREATE -> buildingId != null && departmentId != null
                     && resourceOwnerUserId == null && vipRoom != null;
+            case RESERVATION_LIFECYCLE -> buildingId != null && departmentId != null
+                    && resourceOwnerUserId != null && vipRoom == null;
             case APPROVE, CANCEL, EXTENSION_REQUEST, EXTENSION_DECIDE ->
                     buildingId != null && resourceOwnerUserId != null
                             && departmentId == null && vipRoom == null;
@@ -43,6 +45,7 @@ public record BookingAuthorizationRequest(
         REQUEST_READ,
         DIRECT_CREATE,
         APPROVE,
+        RESERVATION_LIFECYCLE,
         CANCEL,
         EXTENSION_REQUEST,
         EXTENSION_DECIDE

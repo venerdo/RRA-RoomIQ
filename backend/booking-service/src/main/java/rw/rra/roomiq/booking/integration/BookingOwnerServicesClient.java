@@ -15,10 +15,14 @@ import rw.rra.roomiq.common.web.ApiResponse;
 import rw.rra.roomiq.common.web.DomainException;
 
 import java.net.http.HttpClient;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.LocalTime;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.UUID;
 
 @Component
@@ -31,6 +35,8 @@ public class BookingOwnerServicesClient {
             new ParameterizedTypeReference<>() { };
     private static final ParameterizedTypeReference<ApiResponse<List<RoomRuleReference>>> ROOM_RULES_RESPONSE =
             new ParameterizedTypeReference<>() { };
+    private static final ParameterizedTypeReference<ApiResponse<List<MaintenancePeriodReference>>>
+            MAINTENANCE_PERIODS_RESPONSE = new ParameterizedTypeReference<>() { };
     private static final ParameterizedTypeReference<ApiResponse<CalendarPage>> CALENDAR_PAGE_RESPONSE =
             new ParameterizedTypeReference<>() { };
     private static final ParameterizedTypeReference<ApiResponse<SchedulingDecision>> SCHEDULING_RESPONSE =
@@ -100,23 +106,24 @@ public class BookingOwnerServicesClient {
         List<RoomRuleReference> buildingRules = get(roomClient,
                 "/api/v1/office-buildings/{officeBuildingId}/room-rules", facts.officeBuildingId(),
                 bearerToken, ROOM_RULES_RESPONSE, "ROOM_SERVICE_UNAVAILABLE").data();
-        RoomRuleReference rule = effectiveRule(roomRules, buildingRules, facts.startsAt());
-        validateRoomPolicy(facts, rule, now);
 
         UUID calendarId = resolveCalendarId(building, facts.officeBuildingId(), bearerToken);
         SchedulingDecision schedulingDecision = postSchedulingValidation(calendarId, facts, building.timezone(),
                 bearerToken);
-        if (schedulingDecision == null || !schedulingDecision.valid()) {
-            throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "SCHEDULING_CONSTRAINTS_INVALID",
-                    "The request conflicts with the authoritative working calendar, holiday, or closure policy");
+        if (schedulingDecision == null
+                || !calendarId.equals(schedulingDecision.workingCalendarId())
+                || !java.util.Objects.equals(facts.recurrenceRuleId(), schedulingDecision.recurrenceRuleId())
+                || !building.timezone().equals(schedulingDecision.timezone())) {
+            throw unavailable("SCHEDULING_SERVICE_UNAVAILABLE");
+        }
+        if (!schedulingDecision.valid()) {
+            throw schedulingConstraintsInvalid(schedulingDecision.violations());
         }
         List<SchedulingOccurrence> occurrences = schedulingDecision.occurrenceIntervals();
         if (occurrences == null || occurrences.isEmpty()
                 || occurrences.size() != schedulingDecision.occurrencesEvaluated()
                 || occurrences.size() > 365
-                || !calendarId.equals(schedulingDecision.workingCalendarId())
-                || !java.util.Objects.equals(facts.recurrenceRuleId(), schedulingDecision.recurrenceRuleId())
-                || !building.timezone().equals(schedulingDecision.timezone())
+                || facts.recurrenceRuleId() == null && occurrences.size() != 1
                 || occurrences.stream().anyMatch(java.util.Objects::isNull)
                 || !facts.startsAt().equals(occurrences.getFirst().startsAt())
                 || !facts.endsAt().equals(occurrences.getFirst().endsAt())
@@ -125,18 +132,138 @@ public class BookingOwnerServicesClient {
                         || !occurrence.endsAt().isAfter(occurrence.startsAt()))) {
             throw unavailable("SCHEDULING_SERVICE_UNAVAILABLE");
         }
+        ZoneId timezone;
+        try {
+            timezone = ZoneId.of(building.timezone());
+        } catch (DateTimeException exception) {
+            throw unavailable("SCHEDULING_SERVICE_UNAVAILABLE");
+        }
+        LocalDate firstDate = occurrences.getFirst().occurrenceDate();
+        LocalTime localStart = occurrences.getFirst().startsAt().atZone(timezone).toLocalTime();
+        LocalTime localEnd = occurrences.getFirst().endsAt().atZone(timezone).toLocalTime();
         for (int index = 1; index < occurrences.size(); index++) {
             SchedulingOccurrence previous = occurrences.get(index - 1);
             SchedulingOccurrence current = occurrences.get(index);
             if (!current.occurrenceDate().isAfter(previous.occurrenceDate())
-                    || !current.startsAt().isAfter(previous.startsAt())) {
+                    || !current.startsAt().isAfter(previous.startsAt())
+                    || current.occurrenceDate().isAfter(firstDate.plusYears(1))) {
                 throw unavailable("SCHEDULING_SERVICE_UNAVAILABLE");
             }
         }
 
+        boolean approvalRequired = false;
+        int releaseBufferMinutes = 0;
+        for (SchedulingOccurrence occurrence : occurrences) {
+            LocalDate occurrenceStartDate = occurrence.startsAt().atZone(timezone).toLocalDate();
+            LocalDate occurrenceEndDate = occurrence.endsAt().atZone(timezone).toLocalDate();
+            if (!occurrence.occurrenceDate().equals(occurrenceStartDate)
+                    || !occurrence.occurrenceDate().equals(occurrenceEndDate)
+                    || !localStart.equals(occurrence.startsAt().atZone(timezone).toLocalTime())
+                    || !localEnd.equals(occurrence.endsAt().atZone(timezone).toLocalTime())) {
+                throw unavailable("SCHEDULING_SERVICE_UNAVAILABLE");
+            }
+            BookingRequestFacts occurrenceFacts = new BookingRequestFacts(facts.departmentId(), facts.roomId(),
+                    facts.officeBuildingId(), facts.recurrenceRuleId(), occurrence.startsAt(), occurrence.endsAt(),
+                    facts.attendeeCount(), facts.externalGuests());
+            RoomRuleReference occurrenceRule = effectiveRule(roomRules, buildingRules, occurrence.startsAt());
+            validateRoomPolicy(occurrenceFacts, occurrenceRule, now);
+            approvalRequired |= occurrenceRule.approvalRequired();
+            releaseBufferMinutes = Math.max(releaseBufferMinutes, occurrenceRule.releaseBufferMinutes());
+        }
+        List<MaintenancePeriodReference> maintenancePeriods = get(roomClient,
+                "/api/v1/rooms/{roomId}/maintenance-periods", facts.roomId(), bearerToken,
+                MAINTENANCE_PERIODS_RESPONSE, "ROOM_SERVICE_UNAVAILABLE").data();
+        validateMaintenance(facts.roomId(), occurrences, releaseBufferMinutes, maintenancePeriods);
+
         return new ValidatedBookingReferences(room.officeBuildingId(), department.id(), room.id(),
-                "VIP".equals(room.roomClass()), building.timezone(), rule.approvalRequired(),
-                rule.releaseBufferMinutes(), List.copyOf(occurrences));
+                "VIP".equals(room.roomClass()), building.timezone(), approvalRequired,
+                releaseBufferMinutes, List.copyOf(occurrences));
+    }
+
+    private static void validateMaintenance(UUID roomId, List<SchedulingOccurrence> occurrences,
+                                            int releaseBufferMinutes,
+                                            List<MaintenancePeriodReference> maintenancePeriods) {
+        if (maintenancePeriods == null) {
+            throw unavailable("ROOM_SERVICE_UNAVAILABLE");
+        }
+        if (maintenancePeriods.stream().anyMatch(period -> period == null || period.id() == null
+                || !roomId.equals(period.roomId()) || period.period() == null)) {
+            throw unavailable("ROOM_SERVICE_UNAVAILABLE");
+        }
+        List<TimeRange> ranges = maintenancePeriods.stream()
+                .map(period -> parseMaintenanceRange(period.period()))
+                .toList();
+        TreeSet<LocalDate> conflicts = new TreeSet<>();
+        for (SchedulingOccurrence occurrence : occurrences) {
+            Instant occupiedUntil;
+            try {
+                occupiedUntil = occurrence.endsAt().plusSeconds(Math.multiplyExact((long) releaseBufferMinutes, 60));
+            } catch (ArithmeticException | DateTimeException exception) {
+                throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "BOOKING_INTERVAL_INVALID",
+                        "The requested occupied interval exceeds the supported time range");
+            }
+            for (TimeRange range : ranges) {
+                if (range == null) {
+                    throw unavailable("ROOM_SERVICE_UNAVAILABLE");
+                }
+                if (occurrence.startsAt().isBefore(range.endsAt())
+                        && range.startsAt().isBefore(occupiedUntil)) {
+                    conflicts.add(occurrence.occurrenceDate());
+                }
+            }
+        }
+        if (!conflicts.isEmpty()) {
+            throw occurrenceConflict("ROOM_MAINTENANCE_CONFLICT",
+                    "Room maintenance overlaps occurrence dates: ", conflicts);
+        }
+    }
+
+    private static TimeRange parseMaintenanceRange(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() < 5 || (trimmed.charAt(0) != '[' && trimmed.charAt(0) != '(')
+                || (trimmed.charAt(trimmed.length() - 1) != ']' && trimmed.charAt(trimmed.length() - 1) != ')')) {
+            return null;
+        }
+        String[] endpoints = trimmed.substring(1, trimmed.length() - 1).split(",", -1);
+        if (endpoints.length != 2) {
+            return null;
+        }
+        try {
+            Instant startsAt = Instant.parse(unquote(endpoints[0].trim()));
+            Instant endsAt = Instant.parse(unquote(endpoints[1].trim()));
+            return endsAt.isAfter(startsAt) ? new TimeRange(startsAt, endsAt) : null;
+        } catch (DateTimeException exception) {
+            return null;
+        }
+    }
+
+    private static String unquote(String value) {
+        return value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")
+                ? value.substring(1, value.length() - 1) : value;
+    }
+
+    private static DomainException schedulingConstraintsInvalid(List<SchedulingViolation> violations) {
+        if (violations == null || violations.isEmpty()) {
+            return new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "SCHEDULING_CONSTRAINTS_INVALID",
+                    "The request conflicts with the authoritative working calendar or scheduling policy");
+        }
+        String details = violations.stream()
+                .filter(violation -> violation != null)
+                .map(violation -> violation.occurrenceDate() == null ? violation.code()
+                        : violation.occurrenceDate() + ":" + violation.code())
+                .distinct()
+                .collect(java.util.stream.Collectors.joining(", "));
+        return new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "SCHEDULING_CONSTRAINTS_INVALID",
+                "Scheduling constraints failed for " + details);
+    }
+
+    private static DomainException occurrenceConflict(String code, String prefix, TreeSet<LocalDate> conflicts) {
+        return new DomainException(HttpStatus.CONFLICT, code,
+                prefix + conflicts.stream().map(LocalDate::toString)
+                        .collect(java.util.stream.Collectors.joining(", ")));
     }
 
     private UUID resolveCalendarId(BuildingReference building, UUID officeBuildingId, String bearerToken) {
@@ -181,6 +308,9 @@ public class BookingOwnerServicesClient {
 
     private static void validateRoomPolicy(BookingRequestFacts facts, RoomRuleReference rule, Instant now) {
         if (rule == null) {
+            throw unavailable("ROOM_BOOKING_POLICY_UNAVAILABLE");
+        }
+        if (rule.releaseBufferMinutes() < 0) {
             throw unavailable("ROOM_BOOKING_POLICY_UNAVAILABLE");
         }
         if (facts.startsAt() == null || facts.endsAt() == null || !facts.endsAt().isAfter(facts.startsAt())) {
@@ -335,9 +465,17 @@ public class BookingOwnerServicesClient {
 
     public record SchedulingDecision(UUID workingCalendarId, UUID recurrenceRuleId, String timezone,
                                      boolean valid, int occurrencesEvaluated,
+                                     List<SchedulingViolation> violations,
                                      List<SchedulingOccurrence> occurrenceIntervals) { }
 
     public record SchedulingOccurrence(LocalDate occurrenceDate, Instant startsAt, Instant endsAt) { }
+
+    public record SchedulingViolation(LocalDate occurrenceDate, String code, String message) { }
+
+    public record MaintenancePeriodReference(UUID id, UUID roomId, String period, String reason,
+                                             UUID createdByUserId) { }
+
+    private record TimeRange(Instant startsAt, Instant endsAt) { }
 
     public record BookingRequestFacts(UUID departmentId, UUID roomId, UUID officeBuildingId,
                                       UUID recurrenceRuleId, Instant startsAt, Instant endsAt,

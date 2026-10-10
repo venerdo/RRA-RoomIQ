@@ -18,6 +18,8 @@ public final class IdentityPermissionCodes {
     public static final String BOOKING_APPROVE = "BOOKING_APPROVE";
     public static final String BOOKING_CANCEL = "BOOKING_CANCEL";
     public static final String BOOKING_CANCEL_OWN = "BOOKING_CANCEL_OWN";
+    public static final String BOOKING_LIFECYCLE_MANAGE = "BOOKING_LIFECYCLE_MANAGE";
+    public static final String BOOKING_LIFECYCLE_OWN = "BOOKING_LIFECYCLE_OWN";
     public static final String BOOKING_EXTENSION_REQUEST = "BOOKING_EXTENSION_REQUEST";
     public static final String BOOKING_EXTENSION_DECIDE = "BOOKING_EXTENSION_DECIDE";
     public static final String ROOM_MANAGE = "ROOM_MANAGE";

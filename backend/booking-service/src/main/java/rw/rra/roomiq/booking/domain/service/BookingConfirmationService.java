@@ -5,7 +5,7 @@ import org.hibernate.exception.ConstraintViolationException;
 import org.postgresql.util.PGobject;
 import org.postgresql.util.PSQLException;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -37,7 +37,9 @@ import rw.rra.roomiq.common.web.DomainException;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.UUID;
 
 @Service
@@ -125,31 +127,46 @@ public class BookingConfirmationService {
 
         try {
             reservations.saveAndFlush(reservation);
-            occurrences.saveAllAndFlush(reservationOccurrences);
-            meetings.saveAndFlush(meeting);
-            participants.saveAndFlush(organizer);
-            bookingRequests.saveAndFlush(bookingRequest);
-        } catch (DataIntegrityViolationException exception) {
-            if (hasConstraint(exception, RESERVATION_OVERLAP_CONSTRAINT)
-                    || hasConstraint(exception, OCCURRENCE_OVERLAP_CONSTRAINT)) {
-                throw occupancyConflict(null);
+        } catch (DataAccessException exception) {
+            if (hasConstraint(exception, RESERVATION_OVERLAP_CONSTRAINT) || isPostgresDeadlock(exception)) {
+                throw occupancyConflict(List.of(first.occurrenceDate()));
             }
             throw exception;
         }
+        for (int index = 0; index < reservationOccurrences.size(); index++) {
+            try {
+                occurrences.saveAndFlush(reservationOccurrences.get(index));
+            } catch (DataAccessException exception) {
+                if (hasConstraint(exception, OCCURRENCE_OVERLAP_CONSTRAINT) || isPostgresDeadlock(exception)) {
+                    throw occupancyConflict(List.of(ranges.get(index).occurrence().occurrenceDate()));
+                }
+                throw exception;
+            }
+        }
+        meetings.saveAndFlush(meeting);
+        participants.saveAndFlush(organizer);
+        bookingRequests.saveAndFlush(bookingRequest);
         return new ConfirmedBooking(reservation, meeting, reservationOccurrences.size());
     }
 
     private void checkExistingConflicts(UUID roomId, List<OccurrenceRange> ranges) {
-        Instant priorOccupiedUntil = null;
+        TreeSet<java.time.LocalDate> conflictingDates = new TreeSet<>();
+        List<OccurrenceRange> precedingRanges = new ArrayList<>();
         for (OccurrenceRange range : ranges) {
             SchedulingOccurrence occurrence = range.occurrence();
-            if (priorOccupiedUntil != null && occurrence.startsAt().isBefore(priorOccupiedUntil)) {
-                throw occupancyConflict(occurrence.occurrenceDate());
+            for (OccurrenceRange previous : precedingRanges) {
+                if (occurrence.startsAt().isBefore(previous.occupiedUntil())) {
+                    conflictingDates.add(previous.occurrence().occurrenceDate());
+                    conflictingDates.add(occurrence.occurrenceDate());
+                }
             }
             if (occurrences.existsRoomOccupancyConflict(roomId, occurrence.startsAt(), range.occupiedUntil())) {
-                throw occupancyConflict(occurrence.occurrenceDate());
+                conflictingDates.add(occurrence.occurrenceDate());
             }
-            priorOccupiedUntil = range.occupiedUntil();
+            precedingRanges.add(range);
+        }
+        if (!conflictingDates.isEmpty()) {
+            throw occupancyConflict(conflictingDates);
         }
     }
 
@@ -208,7 +225,7 @@ public class BookingConfirmationService {
                 "Authentication is required");
     }
 
-    private static boolean hasConstraint(DataIntegrityViolationException exception, String expectedName) {
+    private static boolean hasConstraint(Throwable exception, String expectedName) {
         Throwable cause = exception;
         while (cause != null) {
             if (cause instanceof ConstraintViolationException violation
@@ -225,9 +242,22 @@ public class BookingConfirmationService {
         return false;
     }
 
-    private static DomainException occupancyConflict(java.time.LocalDate occurrenceDate) {
-        String detail = occurrenceDate == null ? "An occurrence overlaps an existing booking"
-                : "An existing booking overlaps occurrence on " + occurrenceDate;
+    private static boolean isPostgresDeadlock(Throwable exception) {
+        Throwable cause = exception;
+        while (cause != null) {
+            if (cause instanceof PSQLException postgresException
+                    && "40P01".equals(postgresException.getSQLState())) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
+    }
+
+    private static DomainException occupancyConflict(Collection<java.time.LocalDate> occurrenceDates) {
+        String detail = "Room occupancy conflicts on occurrence dates: " + occurrenceDates.stream()
+                .map(java.time.LocalDate::toString).distinct().sorted().collect(
+                        java.util.stream.Collectors.joining(", "));
         return new DomainException(HttpStatus.CONFLICT, "ROOM_OCCUPANCY_CONFLICT", detail);
     }
 

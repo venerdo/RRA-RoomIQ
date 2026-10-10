@@ -91,6 +91,44 @@ class BookingAuthorizationClientTests {
     }
 
     @Test
+    void lifecycleAuthorizationVerifiesIdentityEchoesThePersistedOrganizerScope() {
+        UUID actorId = UUID.randomUUID();
+        UUID organizerId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        UUID buildingId = UUID.randomUUID();
+        server.expect(requestTo(URL + "/api/v1/internal/authorization/booking"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Authorization", CALLER_TOKEN))
+                .andExpect(jsonPath("$.action").value("RESERVATION_LIFECYCLE"))
+                .andExpect(jsonPath("$.resourceOwnerUserId").value(organizerId.toString()))
+                .andExpect(jsonPath("$.departmentId").value(departmentId.toString()))
+                .andExpect(jsonPath("$.buildingId").value(buildingId.toString()))
+                .andRespond(withSuccess("""
+                        {"actorUserId":"%s","resourceOwnerUserId":"%s"}
+                        """.formatted(actorId, organizerId), MediaType.APPLICATION_JSON));
+
+        assertThat(client.authorizeReservationLifecycle(organizerId, departmentId, buildingId))
+                .isEqualTo(actorId);
+        server.verify();
+    }
+
+    @Test
+    void lifecycleAuthorizationFailsClosedWhenIdentityEchoesAnotherOrganizer() {
+        UUID organizerId = UUID.randomUUID();
+        server.expect(requestTo(URL + "/api/v1/internal/authorization/booking"))
+                .andRespond(withSuccess("""
+                        {"actorUserId":"%s","resourceOwnerUserId":"%s"}
+                        """.formatted(UUID.randomUUID(), UUID.randomUUID()), MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.authorizeReservationLifecycle(
+                organizerId, UUID.randomUUID(), UUID.randomUUID()))
+                .isInstanceOf(DomainException.class)
+                .satisfies(exception -> assertThat(((DomainException) exception).status())
+                        .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+        server.verify();
+    }
+
+    @Test
     void mapsIdentityAuthenticationFailureWithoutProceeding() {
         server.expect(requestTo(URL + "/api/v1/internal/authorization/booking"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED));

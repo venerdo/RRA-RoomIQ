@@ -2,7 +2,7 @@
 
 ## Current scope
 
-Stage 4 S4-01 through S4-12 is accepted. S5-01 through S5-07 are implemented and verified; Stage 5 is awaiting explicit user acceptance. Availability candidates use Room owner APIs and a versioned Booking occupancy contract, but candidate-producing searches fail closed until Booking implements its S6 provider.
+Stage 4 S4-01 through S4-12 and Stage 5 S5-01 through S5-07 are accepted. S6-06 Booking confirmation consumes Scheduling's existing recurrence and constraint-validation APIs for every bounded occurrence; Scheduling still owns recurrence evaluation and does not persist Booking occupancy. Availability candidates use Room owner APIs and a versioned Booking occupancy contract, but candidate-producing searches fail closed until Booking implements its S6 occupancy provider.
 
 ## Ownership boundary
 
@@ -41,6 +41,8 @@ Expansion operates on `LocalDate` values, avoiding elapsed-time/DST shifts; the 
 Booking can call the read-only `POST /api/v1/scheduling-constraints/validate` endpoint before confirming or changing a reservation. The request supplies a persisted `workingCalendarId`, `officeBuildingId`, `startsAt`/`endsAt` Instants, the expected IANA `timezone`, and an optional persisted `recurrenceRuleId`. The timezone must exactly match the selected active calendar; if a recurrence is supplied, its stored timezone must match as well. Instants are converted to local date/time using that zone. Start and end must fall on the same local date, with end later than start. Recurring rules reuse the submitted local times on every bounded occurrence date (maximum 365 from S5-04). A nonexistent recurring wall-clock time during a timezone transition is rejected; ambiguous times resolve consistently using the zone's first valid offset.
 
 For each date, validation requires the full interval to fit inside at least one working window marked as a working day, rejects applicable active `blocksBooking` holidays (calendar, building, intersection, or nationwide), and rejects overlaps with blocking building-scoped or nationwide half-open closure ranges. Inactive calendars and calendars scoped to another building return a failed validation result. Policy conflicts are returned as HTTP 200 with `data.valid=false`, the checked occurrence count, and stable occurrence-scoped violation codes. Booking must proceed only when `data.valid=true`. Malformed intervals/timezones/recurrence combinations and missing referenced calendars/rules return errors; Identity authorization outages return 503. The validation POST uses Identity `READ` authorization because it is read-only. The API does not query other services or mutate Booking/reservation/occupancy data. No ERD or migration change was needed.
+
+S6-06 Booking confirmation uses this existing endpoint to validate every occurrence generated from the stored recurrence rule and timezone. Scheduling's protected API and schema are unchanged; Booking validates room policy, maintenance, and occupancy through their owner boundaries before its own atomic persistence.
 
 ## S5-06 availability search
 

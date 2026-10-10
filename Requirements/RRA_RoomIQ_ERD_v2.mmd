@@ -309,6 +309,7 @@ erDiagram
     int release_buffer_minutes "required default 5"
     reservation_status status "enum CONFIRMED IN_PROGRESS COMPLETED CANCELLED RELEASED"
     timestamptz checked_in_at
+    timestamptz completed_at "required iff status is COMPLETED"
     int version "optimistic lock"
     timestamptz created_at "required"
   }

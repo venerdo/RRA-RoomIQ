@@ -31,6 +31,9 @@ public class ReservationOccurrence extends BookingEntity {
     @Column(name = "end_at", nullable = false)
     private Instant endAt;
 
+    @Column(name = "occupancy_active", nullable = false)
+    private boolean occupancyActive = true;
+
     @Type(PostgreSqlTstzRangeType.class)
     @Column(name = "occupied_period", nullable = false, columnDefinition = "tstzrange")
     private PGobject occupiedPeriod;
@@ -51,5 +54,10 @@ public class ReservationOccurrence extends BookingEntity {
     public UUID getRoomId() { return roomId; }
     public Instant getStartAt() { return startAt; }
     public Instant getEndAt() { return endAt; }
+    public boolean isOccupancyActive() { return occupancyActive; }
     public PGobject getOccupiedPeriod() { return occupiedPeriod; }
+
+    public void releaseOccupancy() {
+        occupancyActive = false;
+    }
 }

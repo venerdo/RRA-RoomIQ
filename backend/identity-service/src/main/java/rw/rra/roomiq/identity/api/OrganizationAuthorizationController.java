@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RestController;
 import rw.rra.roomiq.identity.domain.dto.BookingAuthorizationRequest;
 import rw.rra.roomiq.identity.domain.dto.BookingAuthorizationResponse;
 import rw.rra.roomiq.identity.domain.dto.OrganizationAuthorizationRequest;
+import rw.rra.roomiq.identity.domain.dto.MeetingAuthorizationRequest;
+import rw.rra.roomiq.identity.domain.dto.MeetingAuthorizationResponse;
 import rw.rra.roomiq.identity.domain.dto.RoomManagementAuthorizationRequest;
 import rw.rra.roomiq.identity.domain.dto.RoomManagementAuthorizationResponse;
 import rw.rra.roomiq.identity.domain.dto.SchedulingAuthorizationRequest;
@@ -69,19 +71,55 @@ public class OrganizationAuthorizationController {
             case EXTENSION_DECIDE -> authorization.canDecideBookingExtension(authentication,
                     request.resourceOwnerUserId(), request.buildingId());
         };
+        var cancellationAuthority = request.action() == BookingAuthorizationRequest.Action.CANCEL
+                ? authorization.cancellationAuthority(authentication, request.resourceOwnerUserId(),
+                request.buildingId()) : null;
         var actorUserId = authorization.authenticatedUserId(authentication);
         if (!allowed || actorUserId == null) {
             throw new AccessDeniedException("Booking access is denied");
         }
         UUID resourceOwnerUserId = switch (request.action()) {
-            case APPROVE, RESERVATION_LIFECYCLE -> request.resourceOwnerUserId();
+            case APPROVE, RESERVATION_LIFECYCLE, CANCEL -> request.resourceOwnerUserId();
             case DIRECT_CREATE -> actorUserId;
             default -> null;
         };
         String resourceOwnerDisplayName = resourceOwnerUserId == null
+                || request.action() == BookingAuthorizationRequest.Action.CANCEL
                 ? null : authorization.bookingRequesterDisplayName(resourceOwnerUserId);
         return ResponseEntity.ok(new BookingAuthorizationResponse(
-                actorUserId, resourceOwnerUserId, resourceOwnerDisplayName, directBookingAuthority));
+                actorUserId, resourceOwnerUserId, resourceOwnerDisplayName, directBookingAuthority,
+                cancellationAuthority));
+    }
+
+    @PostMapping("/meeting")
+    @Operation(summary = "Authorize meeting access",
+            description = "Evaluate the authenticated active user's meeting read or management scope against persisted Booking meeting facts. Internal participant identity is validated from the current active account.")
+    public ResponseEntity<MeetingAuthorizationResponse> authorizeMeeting(
+            @Valid @RequestBody MeetingAuthorizationRequest request,
+            Authentication authentication) {
+        boolean allowed = switch (request.action()) {
+            case READ -> authorization.canReadMeeting(authentication, request.organizerUserId(),
+                    request.departmentId(), request.buildingId(), request.visibility());
+            case MANAGE -> authorization.canManageMeeting(authentication, request.organizerUserId(),
+                    request.departmentId(), request.buildingId());
+        };
+        UUID actorUserId = authorization.authenticatedUserId(authentication);
+        if (!allowed || actorUserId == null) {
+            throw new AccessDeniedException("Meeting access is denied");
+        }
+
+        String organizerDisplayName = authorization.bookingRequesterDisplayName(request.organizerUserId());
+        String participantDisplayName = null;
+        if (request.participantUserId() != null) {
+            participantDisplayName = authorization.activeMeetingParticipantDisplayName(
+                    request.participantUserId(), request.buildingId());
+            if (participantDisplayName == null) {
+                throw new AccessDeniedException("Internal meeting participant is not active in this building");
+            }
+        }
+        return ResponseEntity.ok(new MeetingAuthorizationResponse(actorUserId, request.buildingId(),
+                request.departmentId(), request.organizerUserId(), request.visibility(), organizerDisplayName,
+                request.participantUserId(), participantDisplayName));
     }
 
     @PostMapping("/organization")

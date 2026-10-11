@@ -63,6 +63,20 @@ public class BookingAuthorizationClient {
         return response.actorUserId();
     }
 
+    public BookingAuthorizationResponse authorizeCancellation(UUID resourceOwnerUserId, UUID buildingId) {
+        BookingAuthorizationResponse response = authorizeResponse(currentAuthorization(),
+                new BookingAuthorizationRequest(Action.CANCEL, buildingId, null, resourceOwnerUserId, null));
+        if (!resourceOwnerUserId.equals(response.resourceOwnerUserId())
+                || response.cancellationAuthority() == null) {
+            throw unavailable();
+        }
+        return response;
+    }
+
+    public String currentBearerToken() {
+        return currentAuthorization();
+    }
+
     public BookingAuthorizationResponse authorizeDirectBooking(UUID buildingId, UUID departmentId,
                                                                boolean vipRoom) {
         BookingAuthorizationResponse response = authorizeResponse(currentAuthorization(),
@@ -74,6 +88,45 @@ public class BookingAuthorizationClient {
             throw unavailable();
         }
         return response;
+    }
+
+    public MeetingAuthorizationResponse authorizeMeeting(MeetingAuthorizationRequest request) {
+        String bearerToken = currentAuthorization();
+        if (request == null || request.action() == null || request.buildingId() == null
+                || request.departmentId() == null || request.organizerUserId() == null
+                || request.visibility() == null
+                || request.action() == MeetingAuthorizationRequest.Action.READ
+                && request.participantUserId() != null) {
+            throw unavailable();
+        }
+        try {
+            MeetingAuthorizationResponse response = identityClient.post()
+                    .uri("/api/v1/internal/authorization/meeting")
+                    .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(MeetingAuthorizationResponse.class);
+            if (response == null || response.actorUserId() == null
+                    || !request.buildingId().equals(response.buildingId())
+                    || !request.departmentId().equals(response.departmentId())
+                    || !request.organizerUserId().equals(response.organizerUserId())
+                    || request.visibility() != response.visibility()
+                    || !java.util.Objects.equals(request.participantUserId(), response.participantUserId())
+                    || request.participantUserId() != null
+                    && (response.participantDisplayName() == null
+                    || response.participantDisplayName().isBlank())) {
+                throw unavailable();
+            }
+            return response;
+        } catch (HttpClientErrorException.Unauthorized exception) {
+            throw authenticationRequired();
+        } catch (HttpClientErrorException.Forbidden exception) {
+            throw new DomainException(HttpStatus.FORBIDDEN, "MEETING_ACCESS_DENIED",
+                    "Meeting access is not authorized");
+        } catch (RestClientException exception) {
+            throw unavailable();
+        }
     }
 
     private BookingAuthorizationResponse authorizeResponse(String bearerToken, BookingAuthorizationRequest request) {

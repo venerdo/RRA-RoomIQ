@@ -112,4 +112,12 @@ public class Reservation extends BookingEntity {
         status = ReservationStatus.COMPLETED;
         return true;
     }
+
+    public boolean cancel() {
+        if (status != ReservationStatus.CONFIRMED && status != ReservationStatus.IN_PROGRESS) {
+            return false;
+        }
+        status = ReservationStatus.CANCELLED;
+        return true;
+    }
 }

@@ -257,6 +257,59 @@ class BookingOwnerServicesClientTests {
                 .hasMessageContaining("Authentication is required");
     }
 
+    @Test
+    void cancellationDeadlineUsesCurrentRoomSpecificRuleAndPropagatesCallerToken() {
+        UUID ruleId = UUID.randomUUID();
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId,
+                """
+                {"success":true,"message":"ok","data":{"id":"%s","officeBuildingId":"%s",
+                 "capacity":12,"roomClass":"STANDARD","status":"AVAILABLE","deletedAt":null}}
+                """.formatted(roomId, buildingId));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/rules",
+                """
+                {"success":true,"message":"ok","data":[
+                 {"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":5,"maxAdvanceDays":90,
+                  "cancellationDeadlineMinutes":30,"recurringAllowed":true,"externalGuestsAllowed":true,
+                  "approvalRequired":false,"outsideHoursAllowed":false,"releaseBufferMinutes":5,
+                  "active":true,"effectiveFrom":null,"allowedDepartmentIds":[]},
+                 {"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":5,"maxAdvanceDays":90,
+                  "cancellationDeadlineMinutes":60,"recurringAllowed":true,"externalGuestsAllowed":true,
+                  "approvalRequired":false,"outsideHoursAllowed":false,"releaseBufferMinutes":5,
+                  "active":true,"effectiveFrom":"2026-10-10T09:00:00Z","allowedDepartmentIds":[]}
+                ]}
+                """.formatted(UUID.randomUUID(), roomId, ruleId, roomId));
+        expectGet(ROOM_URL, "/api/v1/office-buildings/" + buildingId + "/room-rules",
+                """
+                {"success":true,"message":"ok","data":[]}
+                """);
+
+        assertThat(client.cancellationDeadlineAt(roomId, buildingId, startsAt, TOKEN))
+                .isEqualTo(startsAt.minusSeconds(3_600));
+    }
+
+    @Test
+    void missingEffectiveCancellationRuleFailsClosed() {
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId,
+                """
+                {"success":true,"message":"ok","data":{"id":"%s","officeBuildingId":"%s",
+                 "capacity":12,"roomClass":"STANDARD","status":"AVAILABLE","deletedAt":null}}
+                """.formatted(roomId, buildingId));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/rules",
+                """
+                {"success":true,"message":"ok","data":[]}
+                """);
+        expectGet(ROOM_URL, "/api/v1/office-buildings/" + buildingId + "/room-rules",
+                """
+                {"success":true,"message":"ok","data":[]}
+                """);
+
+        assertThatThrownBy(() -> client.cancellationDeadlineAt(roomId, buildingId, startsAt, TOKEN))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining("cannot proceed");
+    }
+
     private void expectGet(String baseUrl, String path, String response) {
         server.expect(requestTo(baseUrl + path))
                 .andExpect(method(GET))

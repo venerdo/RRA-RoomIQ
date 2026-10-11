@@ -14,6 +14,7 @@ public interface ReservationOccurrenceRepository extends JpaRepository<Reservati
             SELECT EXISTS (
                 SELECT 1 FROM reservation_occurrence
                 WHERE room_id = :roomId
+                  AND occupancy_active = TRUE
                   AND occupied_period && tstzrange(:startsAt, :occupiedUntil, '[)')
             )
             """, nativeQuery = true)
@@ -22,6 +23,15 @@ public interface ReservationOccurrenceRepository extends JpaRepository<Reservati
                                         @Param("occupiedUntil") Instant occupiedUntil);
 
     List<ReservationOccurrence> findAllByReservation_IdOrderByStartAt(UUID reservationId);
+
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("""
+            select occurrence from ReservationOccurrence occurrence
+            where occurrence.reservation.id = :reservationId
+            order by occurrence.startAt
+            """)
+    List<ReservationOccurrence> findAllByReservationIdForUpdate(
+            @org.springframework.data.repository.query.Param("reservationId") UUID reservationId);
 
     @Query("select occurrence from ReservationOccurrence occurrence "
             + "where occurrence.reservation.bookingRequest.id = :requestId order by occurrence.startAt")

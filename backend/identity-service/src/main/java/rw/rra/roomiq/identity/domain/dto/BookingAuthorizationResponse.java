@@ -8,9 +8,22 @@ public record BookingAuthorizationResponse(
         UUID actorUserId,
         UUID resourceOwnerUserId,
         String resourceOwnerDisplayName,
-        BookingDirectBookingAuthority directBookingAuthority) {
+        BookingDirectBookingAuthority directBookingAuthority,
+        CancellationAuthority cancellationAuthority) {
     public BookingAuthorizationResponse(UUID actorUserId, UUID resourceOwnerUserId,
                                         String resourceOwnerDisplayName) {
-        this(actorUserId, resourceOwnerUserId, resourceOwnerDisplayName, null);
+        this(actorUserId, resourceOwnerUserId, resourceOwnerDisplayName, null, null);
+    }
+
+    public BookingAuthorizationResponse(UUID actorUserId, UUID resourceOwnerUserId,
+                                        String resourceOwnerDisplayName,
+                                        BookingDirectBookingAuthority directBookingAuthority) {
+        this(actorUserId, resourceOwnerUserId, resourceOwnerDisplayName, directBookingAuthority, null);
+    }
+
+    public enum CancellationAuthority {
+        OWNER,
+        ADMIN,
+        SYSTEM_ADMIN
     }
 }

@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import rw.rra.roomiq.identity.domain.entity.AppUser;
 import rw.rra.roomiq.identity.domain.entity.Role;
 import rw.rra.roomiq.identity.domain.entity.UserStatus;
+import rw.rra.roomiq.identity.domain.dto.MeetingAuthorizationRequest.Visibility;
 import rw.rra.roomiq.identity.domain.repository.AppUserRepository;
 import rw.rra.roomiq.identity.domain.repository.IdentityAuthorizationRepository;
 import rw.rra.roomiq.identity.domain.repository.RoleRepository;
@@ -459,17 +460,28 @@ public class IdentityAuthorizationService {
     }
 
     public boolean canCancelBooking(Authentication authentication, UUID organizerUserId, UUID buildingId) {
+        return cancellationAuthority(authentication, organizerUserId, buildingId) != null;
+    }
+
+    public rw.rra.roomiq.identity.domain.dto.BookingAuthorizationResponse.CancellationAuthority cancellationAuthority(
+            Authentication authentication, UUID organizerUserId, UUID buildingId) {
         UUID actorId = actorId(authentication);
         if (actorId == null || !isActive(actorId) || buildingId == null) {
-            return false;
+            return null;
         }
         if (hasGlobalPermission(authentication, actorId)) {
-            return true;
+            return rw.rra.roomiq.identity.domain.dto.BookingAuthorizationResponse.CancellationAuthority.SYSTEM_ADMIN;
         }
         if (actorId.equals(organizerUserId)) {
-            return hasPermission(authentication, actorId, BOOKING_CANCEL_OWN, buildingId);
+            AppUser actor = users.findById(actorId).orElse(null);
+            if (actor == null || !buildingId.equals(actor.getOfficeBuildingId())
+                    || !hasPermission(authentication, actorId, BOOKING_CANCEL_OWN, buildingId)) {
+                return null;
+            }
+            return rw.rra.roomiq.identity.domain.dto.BookingAuthorizationResponse.CancellationAuthority.OWNER;
         }
-        return hasPermission(authentication, actorId, BOOKING_CANCEL, buildingId);
+        return hasPermission(authentication, actorId, BOOKING_CANCEL, buildingId)
+                ? rw.rra.roomiq.identity.domain.dto.BookingAuthorizationResponse.CancellationAuthority.ADMIN : null;
     }
 
     public boolean canManageBookingLifecycle(Authentication authentication, UUID organizerUserId,
@@ -490,6 +502,59 @@ public class IdentityAuthorizationService {
         return user != null && departmentId.equals(user.getDepartmentId())
                 && buildingId.equals(user.getOfficeBuildingId())
                 && hasPermission(authentication, actorId, BOOKING_LIFECYCLE_OWN, buildingId);
+    }
+
+    public boolean canReadMeeting(Authentication authentication, UUID organizerUserId,
+                                  UUID departmentId, UUID buildingId, Visibility visibility) {
+        UUID actorId = actorId(authentication);
+        if (actorId == null || !isActive(actorId) || organizerUserId == null || departmentId == null
+                || buildingId == null || visibility == null) {
+            return false;
+        }
+        if (hasGlobalPermission(authentication, actorId)
+                || hasPermission(authentication, actorId, BOOKING_APPROVE, buildingId)) {
+            return true;
+        }
+        AppUser actor = users.findById(actorId).orElse(null);
+        if (actor == null || !buildingId.equals(actor.getOfficeBuildingId())) {
+            return false;
+        }
+        if (actorId.equals(organizerUserId)) {
+            return departmentId.equals(actor.getDepartmentId());
+        }
+        return visibility == Visibility.INTERNAL;
+    }
+
+    public boolean canManageMeeting(Authentication authentication, UUID organizerUserId,
+                                   UUID departmentId, UUID buildingId) {
+        UUID actorId = actorId(authentication);
+        if (actorId == null || !isActive(actorId) || organizerUserId == null || departmentId == null
+                || buildingId == null) {
+            return false;
+        }
+        if (hasGlobalPermission(authentication, actorId)
+                || hasPermission(authentication, actorId, BOOKING_APPROVE, buildingId)) {
+            return true;
+        }
+        if (!actorId.equals(organizerUserId)) {
+            return false;
+        }
+        AppUser organizer = users.findById(actorId).orElse(null);
+        return organizer != null && buildingId.equals(organizer.getOfficeBuildingId())
+                && departmentId.equals(organizer.getDepartmentId());
+    }
+
+    public String activeMeetingParticipantDisplayName(UUID participantUserId, UUID buildingId) {
+        if (participantUserId == null || buildingId == null) {
+            return null;
+        }
+        AppUser participant = users.findById(participantUserId).orElse(null);
+        if (participant == null || participant.getStatus() != UserStatus.ACTIVE
+                || !buildingId.equals(participant.getOfficeBuildingId())) {
+            return null;
+        }
+        String displayName = participant.getDisplayName();
+        return displayName == null || displayName.isBlank() ? participant.getFullName() : displayName;
     }
 
     public boolean canRequestBookingExtension(Authentication authentication, UUID requesterUserId,

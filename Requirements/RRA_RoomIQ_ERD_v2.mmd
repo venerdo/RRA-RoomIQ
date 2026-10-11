@@ -312,6 +312,7 @@ erDiagram
     timestamptz completed_at "required iff status is COMPLETED"
     int version "optimistic lock"
     timestamptz created_at "required"
+    gist_exclude room_id_eq_occupied_period_overlap "required, concurrent overlap barrier WHERE status NOT IN (CANCELLED, RELEASED)"
   }
 
   RESERVATION_OCCURRENCE {
@@ -321,9 +322,10 @@ erDiagram
     timestamptz start_at "required"
     timestamptz end_at "required, CHECK gt start"
     tstzrange occupied_period "required, [start_at, end_at + reservation release buffer)"
+    boolean occupancy_active "required default true; false when the occurrence is cancelled"
     unique reservation_id_start_at "required"
     index reservation_id_start_at "required"
-    gist_exclude room_id_eq_occupied_period_overlap "required, concurrent overlap barrier"
+    gist_exclude room_id_eq_occupied_period_overlap "required, concurrent overlap barrier WHERE occupancy_active = true"
   }
 
   MEETING {

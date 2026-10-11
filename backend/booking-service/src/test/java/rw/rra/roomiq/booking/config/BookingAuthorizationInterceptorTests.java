@@ -50,6 +50,34 @@ class BookingAuthorizationInterceptorTests {
     }
 
     @Test
+    void meetingAndParticipantRoutesUseTheSameVersionedBearerGuard() {
+        MockHttpServletRequest request = request("POST",
+                "/api/v1/meetings/meeting-id/participants", "Bearer meeting-test-token");
+        UUID actorId = UUID.randomUUID();
+        when(authorizationClient.authenticate(anyString())).thenReturn(actorId);
+
+        assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
+
+        assertThat(request.getAttribute(BookingAuthorizationInterceptor.ACTOR_USER_ID_ATTRIBUTE))
+                .isEqualTo(actorId);
+        verify(authorizationClient).authenticate(anyString());
+    }
+
+    @Test
+    void cancellationRoutesUseTheSameVersionedBearerGuard() {
+        MockHttpServletRequest request = request("POST",
+                "/api/v1/reservations/reservation-id/cancel", "Bearer test-token");
+        UUID actorId = UUID.randomUUID();
+        when(authorizationClient.authenticate(anyString())).thenReturn(actorId);
+
+        interceptor.preHandle(request, response, new Object());
+
+        verify(authorizationClient).authenticate("Bearer test-token");
+        assertThat(request.getAttribute(BookingAuthorizationInterceptor.ACTOR_USER_ID_ATTRIBUTE))
+                .isEqualTo(actorId);
+    }
+
+    @Test
     void optionsRequestsAreAuthenticatedAndDelegatedToo() {
         MockHttpServletRequest request = request("OPTIONS", "/api/v1/bookings", "Bearer test-token");
         when(authorizationClient.authenticate("Bearer test-token")).thenReturn(UUID.randomUUID());

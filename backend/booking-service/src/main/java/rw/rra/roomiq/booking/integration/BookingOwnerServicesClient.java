@@ -61,6 +61,33 @@ public class BookingOwnerServicesClient {
         schedulingClient = builder.clone().baseUrl(schedulingUrl).build();
     }
 
+    public Instant cancellationDeadlineAt(UUID roomId, UUID officeBuildingId, Instant startsAt,
+                                          String bearerToken) {
+        requireBearer(bearerToken);
+        if (roomId == null || officeBuildingId == null || startsAt == null) {
+            throw invalidRequest();
+        }
+        RoomReference room = get(roomClient, "/api/v1/rooms/{id}", roomId, bearerToken,
+                ROOM_RESPONSE, "ROOM_SERVICE_UNAVAILABLE").data();
+        if (room == null || !roomId.equals(room.id()) || !officeBuildingId.equals(room.officeBuildingId())) {
+            throw unavailable("ROOM_SERVICE_UNAVAILABLE");
+        }
+        List<RoomRuleReference> roomRules = get(roomClient, "/api/v1/rooms/{roomId}/rules",
+                roomId, bearerToken, ROOM_RULES_RESPONSE, "ROOM_SERVICE_UNAVAILABLE").data();
+        List<RoomRuleReference> buildingRules = get(roomClient,
+                "/api/v1/office-buildings/{officeBuildingId}/room-rules", officeBuildingId,
+                bearerToken, ROOM_RULES_RESPONSE, "ROOM_SERVICE_UNAVAILABLE").data();
+        RoomRuleReference rule = effectiveRule(roomRules, buildingRules, startsAt);
+        if (rule == null
+                || rule.roomId() != null && !roomId.equals(rule.roomId())
+                || rule.officeBuildingId() != null && !officeBuildingId.equals(rule.officeBuildingId())
+                || rule.cancellationDeadlineMinutes() != null && rule.cancellationDeadlineMinutes() < 0) {
+            throw unavailable("ROOM_CANCELLATION_POLICY_UNAVAILABLE");
+        }
+        return rule.cancellationDeadlineMinutes() == null ? null
+                : startsAt.minus(Duration.ofMinutes(rule.cancellationDeadlineMinutes()));
+    }
+
     public ValidatedBookingReferences validateRequest(BookingRequestFacts facts, String bearerToken, Instant now) {
         requireBearer(bearerToken);
         if (facts == null || now == null) {

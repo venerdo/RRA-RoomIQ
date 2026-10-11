@@ -13,6 +13,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationRequest.Action;
+import rw.rra.roomiq.booking.domain.enums.MeetingVisibility;
 import rw.rra.roomiq.common.web.DomainException;
 
 import java.util.UUID;
@@ -122,6 +123,60 @@ class BookingAuthorizationClientTests {
 
         assertThatThrownBy(() -> client.authorizeReservationLifecycle(
                 organizerId, UUID.randomUUID(), UUID.randomUUID()))
+                .isInstanceOf(DomainException.class)
+                .satisfies(exception -> assertThat(((DomainException) exception).status())
+                        .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+        server.verify();
+    }
+
+    @Test
+    void meetingAuthorizationForwardsCallerTokenAndVerifiesPersistedMeetingFacts() {
+        UUID actorId = UUID.randomUUID();
+        UUID organizerId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        UUID buildingId = UUID.randomUUID();
+        UUID participantId = UUID.randomUUID();
+        server.expect(requestTo(URL + "/api/v1/internal/authorization/meeting"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Authorization", CALLER_TOKEN))
+                .andExpect(jsonPath("$.action").value("MANAGE"))
+                .andExpect(jsonPath("$.buildingId").value(buildingId.toString()))
+                .andExpect(jsonPath("$.departmentId").value(departmentId.toString()))
+                .andExpect(jsonPath("$.organizerUserId").value(organizerId.toString()))
+                .andExpect(jsonPath("$.visibility").value("PRIVATE"))
+                .andExpect(jsonPath("$.participantUserId").value(participantId.toString()))
+                .andRespond(withSuccess("""
+                        {"actorUserId":"%s","buildingId":"%s","departmentId":"%s",
+                         "organizerUserId":"%s","visibility":"PRIVATE","organizerDisplayName":"Organizer",
+                         "participantUserId":"%s","participantDisplayName":"Trusted Participant"}
+                        """.formatted(actorId, buildingId, departmentId, organizerId, participantId),
+                        MediaType.APPLICATION_JSON));
+
+        MeetingAuthorizationResponse response = client.authorizeMeeting(new MeetingAuthorizationRequest(
+                MeetingAuthorizationRequest.Action.MANAGE, buildingId, departmentId, organizerId,
+                MeetingVisibility.PRIVATE, participantId));
+
+        assertThat(response.actorUserId()).isEqualTo(actorId);
+        assertThat(response.organizerDisplayName()).isEqualTo("Organizer");
+        assertThat(response.participantDisplayName()).isEqualTo("Trusted Participant");
+        server.verify();
+    }
+
+    @Test
+    void meetingAuthorizationFailsClosedWhenIdentityEchoesDifferentPersistedFacts() {
+        UUID organizerId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        UUID buildingId = UUID.randomUUID();
+        server.expect(requestTo(URL + "/api/v1/internal/authorization/meeting"))
+                .andRespond(withSuccess("""
+                        {"actorUserId":"%s","buildingId":"%s","departmentId":"%s",
+                         "organizerUserId":"%s"}
+                        """.formatted(UUID.randomUUID(), UUID.randomUUID(), departmentId, organizerId),
+                        MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.authorizeMeeting(new MeetingAuthorizationRequest(
+                MeetingAuthorizationRequest.Action.READ, buildingId, departmentId, organizerId,
+                MeetingVisibility.INTERNAL, null)))
                 .isInstanceOf(DomainException.class)
                 .satisfies(exception -> assertThat(((DomainException) exception).status())
                         .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));

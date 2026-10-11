@@ -21,23 +21,28 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import rw.rra.roomiq.booking.domain.dto.BookingDecisionRequest;
+import rw.rra.roomiq.booking.domain.dto.CancellationRequest;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
 import rw.rra.roomiq.booking.domain.entity.BookingRequest;
+import rw.rra.roomiq.booking.domain.entity.Cancellation;
 import rw.rra.roomiq.booking.domain.entity.ReservationOccurrence;
 import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestStatus;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestType;
+import rw.rra.roomiq.booking.domain.enums.CancellationReason;
 import rw.rra.roomiq.booking.domain.enums.InviteStatus;
 import rw.rra.roomiq.booking.domain.enums.MeetingVisibility;
 import rw.rra.roomiq.booking.domain.enums.ParticipantRole;
 import rw.rra.roomiq.booking.domain.enums.ReservationStatus;
 import rw.rra.roomiq.booking.domain.repository.ApprovalDecisionRepository;
 import rw.rra.roomiq.booking.domain.repository.BookingRequestRepository;
+import rw.rra.roomiq.booking.domain.repository.CancellationRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingParticipantRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
 import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
+import rw.rra.roomiq.booking.domain.service.BookingCancellationService;
 import rw.rra.roomiq.booking.domain.service.ReservationLifecycleService;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationResponse;
@@ -80,6 +85,8 @@ class BookingDecisionPostgresTests {
     private static final Instant END = Instant.parse("2030-04-10T11:00:00Z");
     private static final String FAILING_PARTICIPANT_TRIGGER = "trg_booking_test_fail_participant";
     private static final String FAILING_PARTICIPANT_FUNCTION = "booking_test_fail_participant";
+    private static final String FAILING_CANCELLATION_TRIGGER = "trg_booking_test_fail_cancellation";
+    private static final String FAILING_CANCELLATION_FUNCTION = "booking_test_fail_cancellation";
 
     @Container
     static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
@@ -96,9 +103,13 @@ class BookingDecisionPostgresTests {
     @Autowired
     private ReservationLifecycleService reservationLifecycleService;
     @Autowired
+    private BookingCancellationService cancellationService;
+    @Autowired
     private BookingRequestRepository bookingRequests;
     @Autowired
     private ApprovalDecisionRepository decisions;
+    @Autowired
+    private CancellationRepository cancellations;
     @Autowired
     private ReservationRepository reservations;
     @Autowired
@@ -127,6 +138,8 @@ class BookingDecisionPostgresTests {
         RequestContextHolder.resetRequestAttributes();
         jdbcTemplate.execute("DROP TRIGGER IF EXISTS " + FAILING_PARTICIPANT_TRIGGER + " ON meeting_participant");
         jdbcTemplate.execute("DROP FUNCTION IF EXISTS " + FAILING_PARTICIPANT_FUNCTION + "()");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS " + FAILING_CANCELLATION_TRIGGER + " ON cancellation");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS " + FAILING_CANCELLATION_FUNCTION + "()");
     }
 
     @Test
@@ -516,6 +529,7 @@ class BookingDecisionPostgresTests {
             } finally {
                 RequestContextHolder.resetRequestAttributes();
             }
+
         };
         try {
             Future<String> first = executor.submit(decide);
@@ -529,6 +543,188 @@ class BookingDecisionPostgresTests {
         }
         assertThat(decisionsForRequest(request.getId())).isEqualTo(1);
         assertThat(reservationsForRequest(request.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void recurringCancellationReleasesAllOccurrenceOccupancyAndAllowsRebooking() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        UUID organizerId = UUID.randomUUID();
+        BookingRequest request = pendingRecurringRequest(organizerId, roomId, UUID.randomUUID(), START, END);
+        request.approve();
+        bookingRequests.saveAndFlush(request);
+        PGobject occupied = occupiedPeriod(START, END.plusSeconds(300));
+        Reservation reservation = reservations.saveAndFlush(new Reservation(request, roomId, organizerId,
+                request.getRecurrenceRuleId(), occupied, START, END, 5, ReservationStatus.CONFIRMED, Instant.now()));
+        reservationOccurrences.saveAndFlush(new ReservationOccurrence(reservation, roomId, START, END, occupied));
+        reservationOccurrences.saveAndFlush(new ReservationOccurrence(reservation, roomId,
+                START.plusSeconds(86_400), END.plusSeconds(86_400),
+                occupiedPeriod(START.plusSeconds(86_400), END.plusSeconds(86_700))));
+        configureCancellationAuthorization(organizerId, request.getOfficeBuildingId(),
+                BookingAuthorizationResponse.CancellationAuthority.OWNER);
+        when(ownerServicesClient.cancellationDeadlineAt(roomId, request.getOfficeBuildingId(), START, TOKEN))
+                .thenReturn(null);
+
+        var result = cancellationService.cancelReservation(reservation.getId(),
+                new CancellationRequest(CancellationReason.USER, "Organizer cancelled", null));
+
+        assertThat(result.reservationStatus()).isEqualTo(ReservationStatus.CANCELLED);
+        assertThat(result.bookingRequestStatus()).isEqualTo(BookingRequestStatus.CANCELLED);
+        assertThat(result.overrideApplied()).isFalse();
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .hasSize(2)
+                .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isFalse());
+        assertThat(reservations.existsRoomOccupancyConflict(roomId, START, END.plusSeconds(300))).isFalse();
+        assertThat(reservationOccurrences.existsRoomOccupancyConflict(roomId, START, END.plusSeconds(300)))
+                .isFalse();
+        assertThat(confirmedReservation(UUID.randomUUID(), roomId, START, END).getStatus())
+                .isEqualTo(ReservationStatus.CONFIRMED);
+    }
+
+    @Test
+    void cancellationDeadlineRequiresAnAdministratorOverrideAndPersistsItsSnapshot() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), roomId, START, END);
+        BookingRequest request = reservation.getBookingRequest();
+        UUID adminId = UUID.randomUUID();
+        configureCancellationAuthorization(request.getRequestedByUserId(), request.getOfficeBuildingId(),
+                BookingAuthorizationResponse.CancellationAuthority.ADMIN, adminId);
+        Instant deadline = Instant.now().minusSeconds(600);
+        when(ownerServicesClient.cancellationDeadlineAt(roomId, request.getOfficeBuildingId(), START, TOKEN))
+                .thenReturn(deadline);
+
+        assertThatThrownBy(() -> cancellationService.cancelReservation(reservation.getId(),
+                new CancellationRequest(CancellationReason.ADMIN, "Admin cancellation", null)))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("CANCELLATION_DEADLINE_EXCEEDED"));
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(cancellations.findFirstByReservation_IdOrderByCancelledAtDesc(reservation.getId())).isEmpty();
+
+        var result = cancellationService.cancelReservation(reservation.getId(),
+                new CancellationRequest(CancellationReason.ADMIN, "Admin cancellation", "Urgent operational need"));
+        assertThat(result.overrideApplied()).isTrue();
+        assertThat(result.overrideReason()).isEqualTo("Urgent operational need");
+        assertThat(result.cancellationDeadlineAt()).isEqualTo(deadline);
+        assertThat(result.cancelledByUserId()).isEqualTo(adminId);
+        assertThat(result.reservationStatus()).isEqualTo(ReservationStatus.CANCELLED);
+    }
+
+    @Test
+    void ownerCannotUseAdministrativeReasonOrOverrideAnExpiredDeadline() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), roomId, START, END);
+        BookingRequest request = reservation.getBookingRequest();
+        configureCancellationAuthorization(request.getRequestedByUserId(), request.getOfficeBuildingId(),
+                BookingAuthorizationResponse.CancellationAuthority.OWNER);
+        when(ownerServicesClient.cancellationDeadlineAt(roomId, request.getOfficeBuildingId(), START, TOKEN))
+                .thenReturn(Instant.now().minusSeconds(1));
+
+        assertThatThrownBy(() -> cancellationService.cancelReservation(reservation.getId(),
+                new CancellationRequest(CancellationReason.ADMIN, "Admin cancellation", "I am admin")))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("CANCELLATION_REASON_INVALID"));
+        assertThatThrownBy(() -> cancellationService.cancelReservation(reservation.getId(),
+                new CancellationRequest(CancellationReason.USER, "Late owner cancellation", null)))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("CANCELLATION_DEADLINE_EXCEEDED"));
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(cancellations.findFirstByReservation_IdOrderByCancelledAtDesc(reservation.getId())).isEmpty();
+    }
+
+    @Test
+    void cancellationDatabaseFailureRollsBackStatesHistoryAndOccurrenceRelease() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        BookingRequest request = reservation.getBookingRequest();
+        configureCancellationAuthorization(request.getRequestedByUserId(), request.getOfficeBuildingId(),
+                BookingAuthorizationResponse.CancellationAuthority.OWNER);
+        when(ownerServicesClient.cancellationDeadlineAt(reservation.getRoomId(), request.getOfficeBuildingId(),
+                START, TOKEN)).thenReturn(null);
+        jdbcTemplate.execute("""
+                CREATE OR REPLACE FUNCTION booking_test_fail_cancellation() RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION USING ERRCODE = '23514', CONSTRAINT = 'test_cancellation_failure';
+                END;
+                $$ LANGUAGE plpgsql
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER trg_booking_test_fail_cancellation
+                BEFORE INSERT ON cancellation
+                FOR EACH ROW EXECUTE FUNCTION booking_test_fail_cancellation()
+                """);
+
+        assertThatThrownBy(() -> cancellationService.cancelReservation(reservation.getId(),
+                new CancellationRequest(CancellationReason.USER, "Rollback test", null)))
+                .isInstanceOf(RuntimeException.class);
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(bookingRequests.findById(request.getId()).orElseThrow().getStatus())
+                .isEqualTo(BookingRequestStatus.APPROVED);
+        assertThat(cancellations.findFirstByReservation_IdOrderByCancelledAtDesc(reservation.getId())).isEmpty();
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isTrue());
+    }
+
+    @Test
+    void concurrentCancellationRequestsPersistOneHistoryRecordAndReleaseOnce() throws Exception {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        BookingRequest request = reservation.getBookingRequest();
+        configureCancellationAuthorization(request.getRequestedByUserId(), request.getOfficeBuildingId(),
+                BookingAuthorizationResponse.CancellationAuthority.OWNER);
+        when(ownerServicesClient.cancellationDeadlineAt(reservation.getRoomId(), request.getOfficeBuildingId(),
+                START, TOKEN)).thenReturn(null);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        Callable<UUID> cancel = () -> {
+            MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+            httpRequest.addHeader("Authorization", TOKEN);
+            RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(httpRequest));
+            ready.countDown();
+            start.await(10, TimeUnit.SECONDS);
+            try {
+                return cancellationService.cancelReservation(reservation.getId(),
+                        new CancellationRequest(CancellationReason.USER, "Concurrent cancellation", null))
+                        .cancellationId();
+            } finally {
+                RequestContextHolder.resetRequestAttributes();
+            }
+        };
+        try {
+            Future<UUID> first = executor.submit(cancel);
+            Future<UUID> second = executor.submit(cancel);
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(first.get(30, TimeUnit.SECONDS)).isEqualTo(second.get(30, TimeUnit.SECONDS));
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(cancellations.findAll().stream()
+                .filter(cancellation -> reservation.getId().equals(
+                        cancellation.getReservation() == null ? null : cancellation.getReservation().getId())))
+                .hasSize(1);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isFalse());
+    }
+
+    @Test
+    void pendingRequestCancellationPreservesRequestAndIsIdempotent() {
+        BookingRequest request = pendingRequest(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        configureCancellationAuthorization(request.getRequestedByUserId(), request.getOfficeBuildingId(),
+                BookingAuthorizationResponse.CancellationAuthority.OWNER);
+        CancellationRequest cancellationRequest = new CancellationRequest(
+                CancellationReason.USER, "No longer required", null);
+
+        var first = cancellationService.cancelRequest(request.getId(), cancellationRequest);
+        var replay = cancellationService.cancelRequest(request.getId(), cancellationRequest);
+
+        assertThat(first.cancellationId()).isEqualTo(replay.cancellationId());
+        assertThat(bookingRequests.findById(request.getId())).isPresent()
+                .get().extracting(BookingRequest::getStatus).isEqualTo(BookingRequestStatus.CANCELLED);
+        assertThat(cancellations.findFirstByBookingRequest_IdOrderByCancelledAtDesc(request.getId())).isPresent();
     }
 
     @Test
@@ -751,13 +947,18 @@ class BookingDecisionPostgresTests {
         BookingRequest request = pendingRequest(organizerId, roomId, startsAt, endsAt);
         request.approve();
         bookingRequests.saveAndFlush(request);
-        PGobject occupied = new PGobject();
-        occupied.setType("tstzrange");
-        occupied.setValue("[" + startsAt + "," + endsAt.plusSeconds(300) + ")");
+        PGobject occupied = occupiedPeriod(startsAt, endsAt.plusSeconds(300));
         Reservation reservation = reservations.saveAndFlush(new Reservation(request, roomId, organizerId, null, occupied,
                 startsAt, endsAt, 5, ReservationStatus.CONFIRMED, Instant.now()));
         reservationOccurrences.saveAndFlush(new ReservationOccurrence(reservation, roomId, startsAt, endsAt, occupied));
         return reservation;
+    }
+
+    private static PGobject occupiedPeriod(Instant startsAt, Instant occupiedUntil) throws SQLException {
+        PGobject occupied = new PGobject();
+        occupied.setType("tstzrange");
+        occupied.setValue("[" + startsAt + "," + occupiedUntil + ")");
+        return occupied;
     }
 
     private static void assertLifecycleConflict(
@@ -787,6 +988,19 @@ class BookingDecisionPostgresTests {
         when(authorizationClient.authorizeApproval(request.getRequestedByUserId(), request.getOfficeBuildingId()))
                 .thenReturn(new BookingAuthorizationResponse(actorId,
                         request.getRequestedByUserId(), "Trusted requester"));
+    }
+
+    private void configureCancellationAuthorization(UUID ownerId, UUID buildingId,
+                                                    BookingAuthorizationResponse.CancellationAuthority authority) {
+        configureCancellationAuthorization(ownerId, buildingId, authority, ownerId);
+    }
+
+    private void configureCancellationAuthorization(UUID ownerId, UUID buildingId,
+                                                    BookingAuthorizationResponse.CancellationAuthority authority,
+                                                    UUID actorId) {
+        when(authorizationClient.authorizeCancellation(ownerId, buildingId))
+                .thenReturn(new BookingAuthorizationResponse(actorId, ownerId, null, null, authority));
+        when(authorizationClient.currentBearerToken()).thenReturn(TOKEN);
     }
 
     private void configureOwnerValidation(BookingRequest request, int releaseBufferMinutes) {

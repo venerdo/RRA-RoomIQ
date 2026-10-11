@@ -23,6 +23,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
             SELECT EXISTS (
                 SELECT 1 FROM reservation
                 WHERE room_id = :roomId
+                  AND status NOT IN ('CANCELLED', 'RELEASED')
                   AND occupied_period && tstzrange(:startsAt, :occupiedUntil, '[)')
             )
             """, nativeQuery = true)

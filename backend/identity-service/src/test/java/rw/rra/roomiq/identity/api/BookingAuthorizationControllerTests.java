@@ -307,6 +307,150 @@ class BookingAuthorizationControllerTests {
     }
 
     @Test
+    void cancellationAuthorizationReturnsTrustedOwnerOrScopedAdministratorAuthority() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID otherBuildingId = UUID.randomUUID();
+        AppUser owner = createUser("cancel-owner-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, UUID.randomUUID(), buildingId);
+        AppUser admin = createUser("cancel-admin-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, buildingId);
+        AppUser outOfScopeAdmin = createUser("cancel-out-of-scope-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, otherBuildingId);
+        AppUser systemAdmin = createUser("cancel-system-admin-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, null);
+        Role ownerRole = createRoleWithPermissions("BOOKING_OWNER_CANCEL_" + UUID.randomUUID(),
+                "BOOKING_CANCEL_OWN");
+        Role adminRole = createRoleWithPermissions("BOOKING_ADMIN_CANCEL_" + UUID.randomUUID(),
+                "BOOKING_CANCEL");
+        Role systemAdminRole = createRoleWithPermissions("BOOKING_SYSTEM_ADMIN_CANCEL_" + UUID.randomUUID(),
+                "IDENTITY_SYSTEM_ADMIN");
+        userRoles.saveAndFlush(new UserRole(owner, ownerRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(admin, adminRole, buildingId, null));
+        userRoles.saveAndFlush(new UserRole(outOfScopeAdmin, adminRole, otherBuildingId, null));
+        userRoles.saveAndFlush(new UserRole(systemAdmin, systemAdminRole, null, null));
+
+        mockMvc.perform(bookingDecision(owner.getId().toString(), "CANCEL", owner.getId(), buildingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.actorUserId").value(owner.getId().toString()))
+                .andExpect(jsonPath("$.resourceOwnerUserId").value(owner.getId().toString()))
+                .andExpect(jsonPath("$.cancellationAuthority").value("OWNER"));
+        mockMvc.perform(bookingDecision(admin.getId().toString(), "CANCEL", owner.getId(), buildingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellationAuthority").value("ADMIN"));
+        mockMvc.perform(bookingDecision(outOfScopeAdmin.getId().toString(), "CANCEL", owner.getId(), buildingId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(bookingDecision(owner.getId().toString(), "CANCEL", owner.getId(), otherBuildingId))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(bookingDecision(systemAdmin.getId().toString(), "CANCEL", owner.getId(), buildingId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellationAuthority").value("SYSTEM_ADMIN"));
+    }
+
+    @Test
+    void privateMeetingReadIsLimitedToOrganizerAndScopedReviewers() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser organizer = createUser("meeting-owner-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        organizer.updateProfile(null, null, null, null, "Trusted Organizer", departmentId, buildingId);
+        users.saveAndFlush(organizer);
+        AppUser reviewer = createUser("meeting-reviewer-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, null, buildingId);
+        Role reviewerRole = createRoleWithPermissions("MEETING_REVIEWER_" + UUID.randomUUID(),
+                "BOOKING_APPROVE");
+        userRoles.saveAndFlush(new UserRole(reviewer, reviewerRole, buildingId, null));
+
+        mockMvc.perform(meetingAuthorization(organizer.getId(), "READ", organizer.getId(),
+                        departmentId, buildingId, "PRIVATE", null))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.organizerDisplayName").value("Trusted Organizer"));
+        mockMvc.perform(meetingAuthorization(reviewer.getId(), "READ", organizer.getId(),
+                        departmentId, buildingId, "PRIVATE", null))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.organizerUserId").value(organizer.getId().toString()));
+
+        AppUser colleague = createUser("private-colleague-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, UUID.randomUUID(), buildingId);
+        mockMvc.perform(meetingAuthorization(colleague.getId(), "READ", organizer.getId(),
+                        departmentId, buildingId, "PRIVATE", null))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void internalMeetingReadAllowsOnlyActiveUsersInTheSameBuilding() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser organizer = createUser("internal-meeting-owner-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        AppUser sameBuildingUser = createUser("same-building-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, UUID.randomUUID(), buildingId);
+        AppUser otherBuildingUser = createUser("other-building-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, UUID.randomUUID(), UUID.randomUUID());
+        AppUser inactiveUser = createUser("inactive-building-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.SUSPENDED, UUID.randomUUID(), buildingId);
+
+        mockMvc.perform(meetingAuthorization(sameBuildingUser.getId(), "READ", organizer.getId(),
+                        departmentId, buildingId, "INTERNAL", null))
+                .andExpect(status().isOk());
+        mockMvc.perform(meetingAuthorization(sameBuildingUser.getId(), "READ", organizer.getId(),
+                        departmentId, buildingId, "PUBLIC", null))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(meetingAuthorization(otherBuildingUser.getId(), "READ", organizer.getId(),
+                        departmentId, buildingId, "INTERNAL", null))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(meetingAuthorization(inactiveUser.getId(), "READ", organizer.getId(),
+                        departmentId, buildingId, "INTERNAL", null))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void meetingManagementValidatesInternalParticipantStatusAndBuilding() throws Exception {
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        AppUser organizer = createUser("meeting-manager-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, departmentId, buildingId);
+        AppUser internalParticipant = createUser("meeting-user-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, UUID.randomUUID(), buildingId);
+        internalParticipant.updateProfile(null, null, null, null, "Trusted Participant",
+                internalParticipant.getDepartmentId(), buildingId);
+        users.saveAndFlush(internalParticipant);
+        AppUser otherBuildingParticipant = createUser("meeting-remote-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, UUID.randomUUID(), UUID.randomUUID());
+        AppUser inactiveParticipant = createUser("meeting-inactive-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.DISABLED, UUID.randomUUID(), buildingId);
+
+        mockMvc.perform(meetingAuthorization(organizer.getId(), "MANAGE", organizer.getId(),
+                        departmentId, buildingId, "PRIVATE", internalParticipant.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.participantUserId").value(internalParticipant.getId().toString()))
+                .andExpect(jsonPath("$.participantDisplayName").value("Trusted Participant"));
+        mockMvc.perform(meetingAuthorization(organizer.getId(), "MANAGE", organizer.getId(),
+                        departmentId, buildingId, "PRIVATE", otherBuildingParticipant.getId()))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(meetingAuthorization(organizer.getId(), "MANAGE", organizer.getId(),
+                        departmentId, buildingId, "PRIVATE", inactiveParticipant.getId()))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(meetingAuthorization(internalParticipant.getId(), "MANAGE", organizer.getId(),
+                        departmentId, buildingId, "PRIVATE", null))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void meetingAuthorizationRejectsMissingFactsAndParticipantReadTargets() throws Exception {
+        AppUser user = createUser("meeting-invalid-" + UUID.randomUUID() + "@rra.rw",
+                UserStatus.ACTIVE, UUID.randomUUID(), UUID.randomUUID());
+        mockMvc.perform(post("/api/v1/internal/authorization/meeting")
+                        .with(jwt().jwt(token -> token.subject(user.getId().toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"action":"READ","buildingId":"%s","organizerUserId":"%s",
+                                 "departmentId":"%s","visibility":"PRIVATE","participantUserId":"%s"}
+                                """.formatted(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                                UUID.randomUUID())))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void malformedOrIrrelevantAuthorizationFactsAreRejected() throws Exception {
         AppUser user = createUser("validation-" + UUID.randomUUID() + "@rra.rw", UserStatus.ACTIVE, null, null);
 
@@ -332,6 +476,20 @@ class BookingAuthorizationControllerTests {
                 .content("""
                         {"action":"REQUEST_CREATE","departmentId":"%s","buildingId":"%s","vipRoom":%s}
                         """.formatted(departmentId, buildingId, vipRoom));
+    }
+
+    private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder meetingAuthorization(
+            UUID tokenSubject, String action, UUID organizerUserId, UUID departmentId,
+            UUID buildingId, String visibility, UUID participantUserId) {
+        String participant = participantUserId == null ? "" :
+                ",\"participantUserId\":\"" + participantUserId + "\"";
+        return post("/api/v1/internal/authorization/meeting")
+                .with(jwt().jwt(token -> token.subject(tokenSubject.toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"action":"%s","organizerUserId":"%s","departmentId":"%s",
+                         "buildingId":"%s","visibility":"%s"%s}
+                        """.formatted(action, organizerUserId, departmentId, buildingId, visibility, participant));
     }
 
     private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder bookingDirect(

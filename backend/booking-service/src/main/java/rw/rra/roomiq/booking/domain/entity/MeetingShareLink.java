@@ -19,6 +19,9 @@ public class MeetingShareLink extends BookingEntity {
     @Column(name = "token_hash", nullable = false, unique = true, columnDefinition = "varchar")
     private String tokenHash;
 
+    @Column(nullable = false, length = 64, columnDefinition = "varchar")
+    private String timezone;
+
     @Column(name = "created_by_user_id", nullable = false)
     private UUID createdByUserId;
 
@@ -34,10 +37,11 @@ public class MeetingShareLink extends BookingEntity {
     protected MeetingShareLink() {
     }
 
-    public MeetingShareLink(Meeting meeting, String tokenHash, UUID createdByUserId,
+    public MeetingShareLink(Meeting meeting, String tokenHash, String timezone, UUID createdByUserId,
                             Instant expiresAt, Instant revokedAt, int viewCount) {
         this.meeting = meeting;
         this.tokenHash = tokenHash;
+        this.timezone = timezone;
         this.createdByUserId = createdByUserId;
         this.expiresAt = expiresAt;
         this.revokedAt = revokedAt;
@@ -46,8 +50,25 @@ public class MeetingShareLink extends BookingEntity {
 
     public Meeting getMeeting() { return meeting; }
     public String getTokenHash() { return tokenHash; }
+    public String getTimezone() { return timezone; }
     public UUID getCreatedByUserId() { return createdByUserId; }
     public Instant getExpiresAt() { return expiresAt; }
     public Instant getRevokedAt() { return revokedAt; }
     public int getViewCount() { return viewCount; }
+
+    public boolean revoke(Instant at) {
+        if (at == null || revokedAt != null) {
+            return false;
+        }
+        revokedAt = at;
+        return true;
+    }
+
+    public boolean recordView() {
+        if (viewCount == Integer.MAX_VALUE) {
+            return false;
+        }
+        viewCount++;
+        return true;
+    }
 }

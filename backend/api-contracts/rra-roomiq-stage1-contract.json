@@ -3,7 +3,7 @@
   "project": "RRA RoomIQ",
   "stage": "Stage 6",
   "status": "stage-6-in-progress",
-  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-10 are complete and verified. Booking exposes protected request, decision, direct-booking, reservation lifecycle, meeting, participant, cancellation, and extension operations; none is routed through the API Gateway. Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Booking decisions revalidate current owner policy and occupancy, then atomically persist the decision and required reservation/meeting data. Extension approval revalidates current Scheduling and Room data and updates reservation plus occurrence occupancy under the existing PostgreSQL exclusion barriers; the original start is not re-screened against new-booking advance windows. Requesters cannot decide their own extension. No extension schema/ERD change was needed. Focused S6-10 Booking tests passed 52/52, Identity 53/53, common-web 6/6, and the full 11-module backend reactor 282/282, with zero failures, errors, or skips. The user-approved nullable reservation.completed_at integrity is enforced by Flyway V3. Recurring booking conflicts remain all-or-nothing.",
+  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-11 are complete and verified. Booking exposes protected request, decision, direct-booking, reservation lifecycle, meeting, participant, cancellation, extension, and share-link management operations; none is routed through the API Gateway. The only deliberately unauthenticated Booking route is GET /api/v1/public/meetings/{token}, which returns an explicit public-card allowlist. Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Share-link creation requires current Identity MANAGE authorization and approved/confirmed Booking state, and obtains the IANA timezone from Organization. Public reads persist view counts, enforce expiry/revocation under a row lock, and resolve SHA-256 token hashes. The user explicitly approved only the MEETING_SHARE_LINK.timezone VARCHAR(64) NOT NULL ERD addition; Flyway V5 refuses to invent timezones for legacy rows. Focused S6-11 tests passed 33/33, Identity 53/53, common-web 6/6, and the full 11-module backend reactor 295/295, with zero failures, errors, or skips. The user-approved nullable reservation.completed_at integrity is enforced by Flyway V3. Recurring booking conflicts remain all-or-nothing.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -1051,7 +1051,7 @@
       "S6-08": "complete",
       "S6-09": "complete",
       "S6-10": "complete",
-      "S6-11": "not-started",
+      "S6-11": "complete",
       "S6-12": "not-started",
       "S6-13": "not-started",
       "S6-14": "not-started"
@@ -1107,6 +1107,22 @@
         "includes": [
           "BookingServiceApplicationTests",
           "BookingOwnerServicesClientTests"
+        ]
+      },
+      "focusedS6-11MeetingShareLinks": {
+        "passed": 33,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "coverage": [
+          "256-bit opaque token generation and SHA-256-only persistence",
+          "protected create/revoke authorization and caller-token timezone lookup",
+          "approved request and confirmed reservation eligibility",
+          "public-card exact field allowlist and timezone conversion",
+          "expiry and revocation behavior",
+          "persisted view counting and concurrent reads",
+          "public route bearer-guard exception is path/method scoped",
+          "bounded per-client request rate control"
         ]
       },
       "bookingModuleSuite": {
@@ -1259,7 +1275,45 @@
       }
     },
     "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
-    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, POST /api/v1/booking-requests/{requestId}/cancel, POST /api/v1/bookings/direct, POST /api/v1/reservations/{reservationId}/check-in, POST /api/v1/reservations/{reservationId}/complete, POST /api/v1/reservations/{reservationId}/cancel, POST /api/v1/reservations/{reservationId}/extensions, POST /api/v1/booking-extensions/{extensionId}/decision, POST /api/v1/booking-extensions/{extensionId}/cancel, GET /api/v1/meetings/{meetingId}, GET/POST /api/v1/meetings/{meetingId}/participants, and DELETE /api/v1/meetings/{meetingId}/participants/{participantId}. Every operation requires bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The direct and recurring flows use the approved reservation_occurrence model. Share-link and occupancy-provider routes remain unimplemented.",
+    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, POST /api/v1/booking-requests/{requestId}/cancel, POST /api/v1/bookings/direct, POST /api/v1/reservations/{reservationId}/check-in, POST /api/v1/reservations/{reservationId}/complete, POST /api/v1/reservations/{reservationId}/cancel, POST /api/v1/reservations/{reservationId}/extensions, POST /api/v1/booking-extensions/{extensionId}/decision, POST /api/v1/booking-extensions/{extensionId}/cancel, GET /api/v1/meetings/{meetingId}, GET/POST /api/v1/meetings/{meetingId}/participants, DELETE /api/v1/meetings/{meetingId}/participants/{participantId}, POST /api/v1/meetings/{meetingId}/share-links, and POST /api/v1/meeting-share-links/{shareLinkId}/revoke. All management operations require bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The sole deliberately unauthenticated Booking data route is GET /api/v1/public/meetings/{token}, returning only title, startAt, endAt, timezone, and organizerDisplayName. The direct and recurring flows use the approved reservation_occurrence model.",
+    "shareLinkOperations": {
+      "protectedManagement": [
+        {
+          "method": "POST",
+          "path": "/api/v1/meetings/{meetingId}/share-links",
+          "authorization": "Bearer-authenticated; rechecks current Identity MANAGE authorization and persisted scope. Caller cannot provide organizer identity or trusted display name.",
+          "eligibility": "Requires an approved booking request and confirmed reservation. Obtains active building IANA timezone from Organization with caller-token propagation; missing, invalid, or unavailable owner data fails closed.",
+          "success": "Returns the opaque raw token once at creation. It is never persisted or returned again."
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/meeting-share-links/{shareLinkId}/revoke",
+          "authorization": "Bearer-authenticated; rechecks current Identity MANAGE authorization for the linked meeting.",
+          "behavior": "Locks and persists the revocation timestamp; repeated revocation does not restore or replace the link."
+        }
+      ],
+      "publicRead": {
+        "method": "GET",
+        "path": "/api/v1/public/meetings/{token}",
+        "authentication": "The only deliberately unauthenticated Booking data route; the route/method exception is narrowly scoped and does not expose any other Booking route.",
+        "token": "256 cryptographically random bits encoded as unpadded base64url. Booking persists only the SHA-256 hash. Invalid, expired, and revoked tokens use the same not-found response.",
+        "response": {
+          "envelope": "ApiResponse<PublicMeetingCardResponse>",
+          "dataFields": [
+            "title",
+            "startAt",
+            "endAt",
+            "timezone",
+            "organizerDisplayName"
+          ],
+          "timestamps": "Original reservation instants are rendered in the stored IANA timezone without changing the instants.",
+          "excluded": "Database IDs, location identifiers/details, agenda, instructions, contacts, participants, internal notes, and all other non-allowlisted fields."
+        },
+        "persistenceAndAbuseControls": "A pessimistic share-link row lock serializes expiry/revocation checks and persisted view-count increments. Per-client process-local rate limit is 60 requests per minute with at most 10,000 tracked clients; production should additionally apply edge rate controls.",
+        "schemaChange": "The user explicitly approved only MEETING_SHARE_LINK.timezone VARCHAR(64) NOT NULL, populated using Organization data at creation. Flyway V5 fails if legacy share-link rows lack an authoritative timezone instead of fabricating one.",
+        "gateway": "No Booking API Gateway route is configured."
+      }
+    },
     "decisionOperation": {
       "method": "POST",
       "path": "/api/v1/booking-requests/{id}/decision",

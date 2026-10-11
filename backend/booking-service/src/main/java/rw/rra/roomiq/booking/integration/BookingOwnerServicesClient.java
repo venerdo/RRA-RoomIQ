@@ -88,6 +88,20 @@ public class BookingOwnerServicesClient {
                 : startsAt.minus(Duration.ofMinutes(rule.cancellationDeadlineMinutes()));
     }
 
+    public String authoritativeBuildingTimezone(UUID officeBuildingId, String bearerToken) {
+        requireBearer(bearerToken);
+        if (officeBuildingId == null) {
+            throw invalidRequest();
+        }
+        BuildingReference building = get(organizationClient, "/api/v1/office-buildings/{id}",
+                officeBuildingId, bearerToken, BUILDING_RESPONSE, "ORGANIZATION_SERVICE_UNAVAILABLE").data();
+        if (!officeBuildingId.equals(building.id()) || !building.active()
+                || building.timezone() == null || !ZoneId.getAvailableZoneIds().contains(building.timezone())) {
+            throw unavailable("ORGANIZATION_BUILDING_TIMEZONE_UNAVAILABLE");
+        }
+        return building.timezone();
+    }
+
     public ValidatedBookingReferences validateRequest(BookingRequestFacts facts, String bearerToken, Instant now) {
         return validateRequest(facts, bearerToken, now, true);
     }

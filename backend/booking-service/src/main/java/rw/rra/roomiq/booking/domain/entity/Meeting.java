@@ -63,4 +63,12 @@ public class Meeting extends BookingEntity {
     public String getContactInfo() { return contactInfo; }
     public MeetingVisibility getVisibility() { return visibility; }
     public Instant getCreatedAt() { return createdAt; }
+
+    public boolean updateOrganizerDisplayName(String trustedDisplayName) {
+        if (trustedDisplayName == null || trustedDisplayName.isBlank()) {
+            return false;
+        }
+        organizerDisplayName = trustedDisplayName.trim();
+        return true;
+    }
 }

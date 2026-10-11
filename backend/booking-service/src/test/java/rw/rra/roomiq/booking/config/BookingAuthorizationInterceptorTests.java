@@ -64,6 +64,30 @@ class BookingAuthorizationInterceptorTests {
     }
 
     @Test
+    void onlyPublicMeetingCardGetRouteBypassesBearerAuthentication() {
+        MockHttpServletRequest request = request("GET",
+                "/api/v1/public/meetings/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq", null);
+        request.setServletPath("/api/v1/public/meetings/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq");
+
+        assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
+
+        verifyNoInteractions(authorizationClient);
+    }
+
+    @Test
+    void publicRouteOtherMethodsAndProtectedShareManagementStillRequireBearer() {
+        for (MockHttpServletRequest request : new MockHttpServletRequest[] {
+                request("POST", "/api/v1/public/meetings/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq", null),
+                request("POST", "/api/v1/meetings/" + UUID.randomUUID() + "/share-links", null),
+                request("POST", "/api/v1/meeting-share-links/" + UUID.randomUUID() + "/revoke", null)}) {
+            assertThatThrownBy(() -> interceptor.preHandle(request, response, new Object()))
+                    .isInstanceOf(DomainException.class)
+                    .hasMessage("Authentication is required");
+        }
+        verifyNoInteractions(authorizationClient);
+    }
+
+    @Test
     void cancellationRoutesUseTheSameVersionedBearerGuard() {
         MockHttpServletRequest request = request("POST",
                 "/api/v1/reservations/reservation-id/cancel", "Bearer test-token");

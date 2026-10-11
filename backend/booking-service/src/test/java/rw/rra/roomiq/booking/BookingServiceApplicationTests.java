@@ -139,7 +139,10 @@ class BookingServiceApplicationTests {
                 "/api/v1/booking-extensions/{extensionId}/cancel",
                 "/api/v1/meetings/{meetingId}",
                 "/api/v1/meetings/{meetingId}/participants",
-                "/api/v1/meetings/{meetingId}/participants/{participantId}");
+                "/api/v1/meetings/{meetingId}/participants/{participantId}",
+                "/api/v1/meetings/{meetingId}/share-links",
+                "/api/v1/meeting-share-links/{shareLinkId}/revoke",
+                "/api/v1/public/meetings/{token}");
     }
 
     @Test
@@ -156,6 +159,9 @@ class BookingServiceApplicationTests {
                 Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '3' AND success = TRUE",
+                Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '5' AND success = TRUE",
                 Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM pg_constraint
@@ -186,6 +192,10 @@ class BookingServiceApplicationTests {
                 SELECT column_default FROM information_schema.columns
                 WHERE table_schema = 'public' AND table_name = 'reservation' AND column_name = 'release_buffer_minutes'
                 """, String.class)).contains("5");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT is_nullable FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'meeting_share_link' AND column_name = 'timezone'
+                """, String.class)).isEqualTo("NO");
     }
 
     @Test
@@ -244,7 +254,8 @@ class BookingServiceApplicationTests {
         MeetingParticipant participant = meetingParticipantRepository.saveAndFlush(new MeetingParticipant(
                 meeting, UUID.randomUUID(), null, "Participant", ParticipantRole.REQUIRED, InviteStatus.INVITED));
         MeetingShareLink shareLink = meetingShareLinkRepository.saveAndFlush(new MeetingShareLink(
-                meeting, "hashed-token-" + UUID.randomUUID(), requesterId, end, null, 0));
+                meeting, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "Africa/Kigali", requesterId, end, null, 0));
         BookingExtension extension = bookingExtensionRepository.saveAndFlush(new BookingExtension(
                 reservation, requesterId, end, end.plusSeconds(1800), null, BookingExtensionStatus.PENDING,
                 null, null, "extend-" + UUID.randomUUID(), start.minusSeconds(600), null));
@@ -271,7 +282,9 @@ class BookingServiceApplicationTests {
         assertThat(meetingParticipantRepository.findById(participant.getId()).orElseThrow()
                 .getRole()).isEqualTo(ParticipantRole.REQUIRED);
         assertThat(meetingShareLinkRepository.findById(shareLink.getId()).orElseThrow()
-                .getTokenHash()).startsWith("hashed-token-");
+                .getTokenHash()).hasSize(64);
+        assertThat(meetingShareLinkRepository.findById(shareLink.getId()).orElseThrow()
+                .getTimezone()).isEqualTo("Africa/Kigali");
         assertThat(bookingExtensionRepository.findById(extension.getId()).orElseThrow()
                 .getRequestedEndAt()).isEqualTo(end.plusSeconds(1800));
         assertThat(cancellationRepository.findById(cancellation.getId()).orElseThrow()

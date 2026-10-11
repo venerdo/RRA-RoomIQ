@@ -38,6 +38,30 @@ class BookingOwnerServicesClientTests {
     private MockRestServiceServer server;
     private BookingOwnerServicesClient client;
 
+    @Test
+    void retrievesActiveBuildingTimezoneFromOrganizationWithCallerToken() {
+        expectGet(ORGANIZATION_URL, "/api/v1/office-buildings/" + buildingId,
+                """
+                {"success":true,"message":"ok","data":{"id":"%s","active":true,
+                 "timezone":"Africa/Kigali","workingCalendarId":"%s"}}
+                """.formatted(buildingId, calendarId));
+
+        assertThat(client.authoritativeBuildingTimezone(buildingId, TOKEN)).isEqualTo("Africa/Kigali");
+    }
+
+    @Test
+    void failsClosedWhenOrganizationReturnsInvalidBuildingTimezone() {
+        expectGet(ORGANIZATION_URL, "/api/v1/office-buildings/" + buildingId,
+                """
+                {"success":true,"message":"ok","data":{"id":"%s","active":true,
+                 "timezone":"Unknown/Zone","workingCalendarId":"%s"}}
+                """.formatted(buildingId, calendarId));
+
+        assertThatThrownBy(() -> client.authoritativeBuildingTimezone(buildingId, TOKEN))
+                .isInstanceOf(DomainException.class)
+                .hasMessageContaining("cannot proceed");
+    }
+
     @BeforeEach
     void setUp() {
         RestClient.Builder builder = RestClient.builder();

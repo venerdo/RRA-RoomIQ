@@ -30,4 +30,18 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     boolean existsRoomOccupancyConflict(@Param("roomId") UUID roomId,
                                         @Param("startsAt") Instant startsAt,
                                         @Param("occupiedUntil") Instant occupiedUntil);
+
+    @Query(value = """
+            SELECT EXISTS (
+                SELECT 1 FROM reservation
+                WHERE room_id = :roomId
+                  AND id <> :reservationId
+                  AND status NOT IN ('CANCELLED', 'RELEASED')
+                  AND occupied_period && tstzrange(:startsAt, :occupiedUntil, '[)')
+            )
+            """, nativeQuery = true)
+    boolean existsRoomOccupancyConflictExcludingReservation(@Param("roomId") UUID roomId,
+                                                              @Param("reservationId") UUID reservationId,
+                                                              @Param("startsAt") Instant startsAt,
+                                                              @Param("occupiedUntil") Instant occupiedUntil);
 }

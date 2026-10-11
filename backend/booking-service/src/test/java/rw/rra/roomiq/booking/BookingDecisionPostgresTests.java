@@ -21,12 +21,16 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import rw.rra.roomiq.booking.domain.dto.BookingDecisionRequest;
+import rw.rra.roomiq.booking.domain.dto.BookingExtensionDecisionRequest;
 import rw.rra.roomiq.booking.domain.dto.CancellationRequest;
+import rw.rra.roomiq.booking.domain.dto.CreateBookingExtensionRequest;
+import rw.rra.roomiq.booking.domain.entity.BookingExtension;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
 import rw.rra.roomiq.booking.domain.entity.BookingRequest;
 import rw.rra.roomiq.booking.domain.entity.Cancellation;
 import rw.rra.roomiq.booking.domain.entity.ReservationOccurrence;
 import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
+import rw.rra.roomiq.booking.domain.enums.BookingExtensionStatus;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestStatus;
 import rw.rra.roomiq.booking.domain.enums.BookingRequestType;
 import rw.rra.roomiq.booking.domain.enums.CancellationReason;
@@ -35,6 +39,7 @@ import rw.rra.roomiq.booking.domain.enums.MeetingVisibility;
 import rw.rra.roomiq.booking.domain.enums.ParticipantRole;
 import rw.rra.roomiq.booking.domain.enums.ReservationStatus;
 import rw.rra.roomiq.booking.domain.repository.ApprovalDecisionRepository;
+import rw.rra.roomiq.booking.domain.repository.BookingExtensionRepository;
 import rw.rra.roomiq.booking.domain.repository.BookingRequestRepository;
 import rw.rra.roomiq.booking.domain.repository.CancellationRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingParticipantRepository;
@@ -42,9 +47,11 @@ import rw.rra.roomiq.booking.domain.repository.MeetingRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
 import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
+import rw.rra.roomiq.booking.domain.service.BookingExtensionService;
 import rw.rra.roomiq.booking.domain.service.BookingCancellationService;
 import rw.rra.roomiq.booking.domain.service.ReservationLifecycleService;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
+import rw.rra.roomiq.booking.integration.BookingAuthorizationRequest;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationResponse;
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient;
 import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.BookingRequestFacts;
@@ -87,6 +94,8 @@ class BookingDecisionPostgresTests {
     private static final String FAILING_PARTICIPANT_FUNCTION = "booking_test_fail_participant";
     private static final String FAILING_CANCELLATION_TRIGGER = "trg_booking_test_fail_cancellation";
     private static final String FAILING_CANCELLATION_FUNCTION = "booking_test_fail_cancellation";
+    private static final String FAILING_EXTENSION_TRIGGER = "trg_booking_test_fail_extension_occurrence";
+    private static final String FAILING_EXTENSION_FUNCTION = "booking_test_fail_extension_occurrence";
 
     @Container
     static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
@@ -105,6 +114,8 @@ class BookingDecisionPostgresTests {
     @Autowired
     private BookingCancellationService cancellationService;
     @Autowired
+    private BookingExtensionService extensionService;
+    @Autowired
     private BookingRequestRepository bookingRequests;
     @Autowired
     private ApprovalDecisionRepository decisions;
@@ -114,6 +125,8 @@ class BookingDecisionPostgresTests {
     private ReservationRepository reservations;
     @Autowired
     private ReservationOccurrenceRepository reservationOccurrences;
+    @Autowired
+    private BookingExtensionRepository extensions;
     @Autowired
     private MeetingRepository meetings;
     @Autowired
@@ -140,6 +153,8 @@ class BookingDecisionPostgresTests {
         jdbcTemplate.execute("DROP FUNCTION IF EXISTS " + FAILING_PARTICIPANT_FUNCTION + "()");
         jdbcTemplate.execute("DROP TRIGGER IF EXISTS " + FAILING_CANCELLATION_TRIGGER + " ON cancellation");
         jdbcTemplate.execute("DROP FUNCTION IF EXISTS " + FAILING_CANCELLATION_FUNCTION + "()");
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS " + FAILING_EXTENSION_TRIGGER + " ON reservation_occurrence");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS " + FAILING_EXTENSION_FUNCTION + "()");
     }
 
     @Test
@@ -394,6 +409,262 @@ class BookingDecisionPostgresTests {
         assertThat(Instant.ofEpochSecond(reservationEnd)).isEqualTo(END.plusSeconds(300));
         assertThat(Instant.ofEpochSecond(occurrenceEnd)).isEqualTo(END.plusSeconds(300));
         assertThat(second.getStatus()).isEqualTo(ReservationStatus.CONFIRMED);
+    }
+
+    @Test
+    void extensionApprovalUpdatesBothOccupancyBarriersAndPreservesDecisionHistory() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID administratorId = UUID.randomUUID();
+        configureExtensionAuthorization(reservation, administratorId);
+        configureOwnerValidation(reservation.getBookingRequest(), 15);
+
+        var pending = extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), "extension-approval");
+        assertThat(pending.status()).isEqualTo(BookingExtensionStatus.PENDING);
+        assertThat(pending.previousEndAt()).isEqualTo(END);
+        assertThat(pending.requestedByUserId()).isEqualTo(reservation.getOrganizerUserId());
+
+        var approved = extensionService.decide(pending.extensionId(),
+                new BookingExtensionDecisionRequest(ApprovalDecisionType.APPROVED, "Approved by admin"));
+
+        assertThat(approved.status()).isEqualTo(BookingExtensionStatus.APPROVED);
+        assertThat(approved.decidedByUserId()).isEqualTo(administratorId);
+        assertThat(approved.decidedByUserId()).isNotEqualTo(approved.requestedByUserId());
+        assertThat(approved.approvedEndAt()).isEqualTo(END.plusSeconds(3_600));
+        assertThat(approved.decisionComment()).isEqualTo("Approved by admin");
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getEndAt())
+                .isEqualTo(END.plusSeconds(3_600));
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getReleaseBufferMinutes()).isEqualTo(15);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .singleElement().satisfies(occurrence ->
+                        assertThat(occurrence.getEndAt()).isEqualTo(END.plusSeconds(3_600)));
+        Long reservationEnd = jdbcTemplate.queryForObject("""
+                SELECT EXTRACT(EPOCH FROM upper(occupied_period))::bigint
+                FROM reservation WHERE id = ?
+                """, Long.class, reservation.getId());
+        Long occurrenceEnd = jdbcTemplate.queryForObject("""
+                SELECT EXTRACT(EPOCH FROM upper(occupied_period))::bigint
+                FROM reservation_occurrence WHERE reservation_id = ?
+                """, Long.class, reservation.getId());
+        assertThat(Instant.ofEpochSecond(reservationEnd)).isEqualTo(END.plusSeconds(4_500));
+        assertThat(Instant.ofEpochSecond(occurrenceEnd)).isEqualTo(END.plusSeconds(4_500));
+        assertThat(extensions.findAll()).filteredOn(extension -> extension.getReservation().getId()
+                .equals(reservation.getId())).hasSize(1);
+    }
+
+    @Test
+    void recurringExtensionIsRejectedAndNoPendingHistoryIsCreated() throws SQLException {
+        UUID organizerId = UUID.randomUUID();
+        UUID recurrenceRuleId = UUID.randomUUID();
+        BookingRequest request = pendingRecurringRequest(organizerId, UUID.randomUUID(), recurrenceRuleId,
+                START, END);
+        request.approve();
+        bookingRequests.saveAndFlush(request);
+        Reservation reservation = reservations.saveAndFlush(new Reservation(request, request.getRoomId(),
+                organizerId, recurrenceRuleId, occupiedPeriod(START, END.plusSeconds(300)),
+                START, END, 5, ReservationStatus.CONFIRMED, Instant.now()));
+        reservationOccurrences.saveAndFlush(new ReservationOccurrence(reservation, request.getRoomId(),
+                START, END, occupiedPeriod(START, END.plusSeconds(300))));
+        when(authorizationClient.authorizeCurrentCaller(any(BookingAuthorizationRequest.class)))
+                .thenReturn(organizerId);
+
+        assertThatThrownBy(() -> extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), null))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> {
+                    DomainException exception = (DomainException) error;
+                    assertThat(exception.status()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+                    assertThat(exception.code()).isEqualTo("RECURRING_RESERVATION_EXTENSION_UNSUPPORTED");
+                    assertThat(exception.getMessage()).contains("Recurring reservations");
+                });
+        assertThat(extensions.findAll()).noneMatch(extension ->
+                extension.getReservation().getId().equals(reservation.getId()));
+    }
+
+    @Test
+    void extensionSelfDecisionIsDeniedAndPendingStateIsPreserved() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID requesterId = reservation.getOrganizerUserId();
+        when(authorizationClient.authorizeCurrentCaller(any(BookingAuthorizationRequest.class)))
+                .thenReturn(requesterId);
+        BookingExtension extension = extensions.saveAndFlush(new rw.rra.roomiq.booking.domain.entity.BookingExtension(
+                reservation, requesterId, END, END.plusSeconds(3_600), null, BookingExtensionStatus.PENDING,
+                null, null, null, Instant.now(), null));
+
+        assertThatThrownBy(() -> extensionService.decide(extension.getId(),
+                new BookingExtensionDecisionRequest(ApprovalDecisionType.APPROVED, null)))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("BOOKING_EXTENSION_SELF_DECISION_DENIED"));
+        assertThat(extensions.findById(extension.getId()).orElseThrow().getStatus())
+                .isEqualTo(BookingExtensionStatus.PENDING);
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getEndAt()).isEqualTo(END);
+    }
+
+    @Test
+    void extensionRequestAuthorizationIsCheckedAgainstThePersistedOrganizer() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        when(authorizationClient.authorizeCurrentCaller(any(BookingAuthorizationRequest.class)))
+                .thenReturn(UUID.randomUUID());
+
+        assertThatThrownBy(() -> extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), null))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("BOOKING_EXTENSION_REQUEST_DENIED"));
+        assertThat(extensions.findAll()).noneMatch(extension ->
+                extension.getReservation().getId().equals(reservation.getId()));
+    }
+
+    @Test
+    void extensionConflictingWithNextReservationIsRejectedWithoutChangingOccupancy() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), roomId, START, END);
+        Reservation next = confirmedReservation(UUID.randomUUID(), roomId, END.plusSeconds(1_800),
+                END.plusSeconds(5_400));
+        UUID administratorId = UUID.randomUUID();
+        configureExtensionAuthorization(reservation, administratorId);
+        configureOwnerValidation(reservation.getBookingRequest(), 5);
+        var pending = extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), "extension-overlap");
+
+        assertThatThrownBy(() -> extensionService.decide(pending.extensionId(),
+                new BookingExtensionDecisionRequest(ApprovalDecisionType.APPROVED, null)))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("ROOM_OCCUPANCY_CONFLICT"));
+
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getEndAt()).isEqualTo(END);
+        assertThat(extensions.findById(pending.extensionId()).orElseThrow().getStatus())
+                .isEqualTo(BookingExtensionStatus.PENDING);
+        assertThat(reservations.findById(next.getId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CONFIRMED);
+    }
+
+    @Test
+    void extensionRequestIdempotencyReplaysOnlyMatchingReservationAndEnd() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID requesterId = reservation.getOrganizerUserId();
+        when(authorizationClient.authorizeCurrentCaller(any(BookingAuthorizationRequest.class)))
+                .thenReturn(requesterId);
+        configureOwnerValidation(reservation.getBookingRequest(), 5);
+        CreateBookingExtensionRequest request = new CreateBookingExtensionRequest(END.plusSeconds(3_600));
+
+        var created = extensionService.request(reservation.getId(), request, "extension-idempotency");
+        var replay = extensionService.request(reservation.getId(), request, "extension-idempotency");
+
+        assertThat(replay.extensionId()).isEqualTo(created.extensionId());
+        assertThat(extensions.findAll()).filteredOn(extension -> extension.getReservation().getId()
+                .equals(reservation.getId())).hasSize(1);
+        assertThatThrownBy(() -> extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(7_200)), "extension-idempotency"))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("IDEMPOTENCY_KEY_CONFLICT"));
+    }
+
+    @Test
+    void extensionRejectionRecordsScopedDecisionWithoutChangingReservation() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID administratorId = UUID.randomUUID();
+        configureExtensionAuthorization(reservation, administratorId);
+        configureOwnerValidation(reservation.getBookingRequest(), 5);
+        var pending = extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), null);
+
+        var rejected = extensionService.decide(pending.extensionId(),
+                new BookingExtensionDecisionRequest(ApprovalDecisionType.REJECTED, "Room is booked next"));
+
+        assertThat(rejected.status()).isEqualTo(BookingExtensionStatus.REJECTED);
+        assertThat(rejected.decidedByUserId()).isEqualTo(administratorId);
+        assertThat(rejected.decisionComment()).isEqualTo("Room is booked next");
+        assertThat(rejected.approvedEndAt()).isNull();
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getEndAt()).isEqualTo(END);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .singleElement().satisfies(occurrence -> assertThat(occurrence.getEndAt()).isEqualTo(END));
+    }
+
+    @Test
+    void failedOccurrenceUpdateRollsBackExtensionDecisionAndReservationChange() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID administratorId = UUID.randomUUID();
+        configureExtensionAuthorization(reservation, administratorId);
+        configureOwnerValidation(reservation.getBookingRequest(), 5);
+        var pending = extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), "extension-rollback");
+        jdbcTemplate.execute("""
+                CREATE OR REPLACE FUNCTION booking_test_fail_extension_occurrence() RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION USING ERRCODE = '23514',
+                        CONSTRAINT = 'test_extension_occurrence_failure';
+                END;
+                $$ LANGUAGE plpgsql
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER trg_booking_test_fail_extension_occurrence
+                BEFORE UPDATE ON reservation_occurrence
+                FOR EACH ROW EXECUTE FUNCTION booking_test_fail_extension_occurrence()
+                """);
+
+        assertThatThrownBy(() -> extensionService.decide(pending.extensionId(),
+                new BookingExtensionDecisionRequest(ApprovalDecisionType.APPROVED, null)))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getEndAt()).isEqualTo(END);
+        assertThat(extensions.findById(pending.extensionId()).orElseThrow().getStatus())
+                .isEqualTo(BookingExtensionStatus.PENDING);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .singleElement().satisfies(occurrence -> assertThat(occurrence.getEndAt()).isEqualTo(END));
+    }
+
+    @Test
+    void concurrentExtensionDecisionsPersistOnlyOneOutcome() throws Exception {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID administratorId = UUID.randomUUID();
+        configureExtensionAuthorization(reservation, administratorId);
+        configureOwnerValidation(reservation.getBookingRequest(), 5);
+        var pending = extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), "extension-concurrent");
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Callable<String> approve = () -> decideExtension(extensionService, pending.extensionId(),
+                new BookingExtensionDecisionRequest(ApprovalDecisionType.APPROVED, null), ready, start);
+        Callable<String> reject = () -> decideExtension(extensionService, pending.extensionId(),
+                new BookingExtensionDecisionRequest(ApprovalDecisionType.REJECTED, null), ready, start);
+        try {
+            Future<String> first = executor.submit(approve);
+            Future<String> second = executor.submit(reject);
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder("decided", "BOOKING_EXTENSION_STATE_CONFLICT");
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(extensions.findById(pending.extensionId()).orElseThrow().getStatus())
+                .isIn(BookingExtensionStatus.APPROVED, BookingExtensionStatus.REJECTED);
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getEndAt())
+                .isIn(END, END.plusSeconds(3_600));
+    }
+
+    @Test
+    void requesterMayCancelOnlyPendingExtensionAndHistoryIsRetained() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        UUID requesterId = reservation.getOrganizerUserId();
+        when(authorizationClient.authorizeCurrentCaller(any(BookingAuthorizationRequest.class)))
+                .thenReturn(requesterId);
+        configureOwnerValidation(reservation.getBookingRequest(), 5);
+        var pending = extensionService.request(reservation.getId(),
+                new CreateBookingExtensionRequest(END.plusSeconds(3_600)), null);
+
+        var cancelled = extensionService.cancel(pending.extensionId());
+
+        assertThat(cancelled.status()).isEqualTo(BookingExtensionStatus.CANCELLED);
+        assertThat(cancelled.decidedByUserId()).isEqualTo(requesterId);
+        assertThat(cancelled.decidedAt()).isNotNull();
+        assertThat(extensions.findById(pending.extensionId())).isPresent();
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getEndAt()).isEqualTo(END);
     }
 
     @Test
@@ -926,6 +1197,24 @@ class BookingDecisionPostgresTests {
         }
     }
 
+    private String decideExtension(BookingExtensionService service, UUID extensionId,
+                                   BookingExtensionDecisionRequest request,
+                                   CountDownLatch ready, CountDownLatch start) throws Exception {
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+        httpRequest.addHeader("Authorization", TOKEN);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(httpRequest));
+        ready.countDown();
+        start.await(10, TimeUnit.SECONDS);
+        try {
+            service.decide(extensionId, request);
+            return "decided";
+        } catch (DomainException exception) {
+            return exception.code();
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
     private BookingRequest pendingRequest(UUID requesterId, UUID roomId, Instant startsAt, Instant endsAt) {
         BookingRequest request = new BookingRequest("BR-" + UUID.randomUUID(), BookingRequestType.SECRETARY_REQUEST,
                 requesterId, UUID.randomUUID(), roomId, UUID.randomUUID(), null, "Test meeting", "Test agenda",
@@ -1003,8 +1292,23 @@ class BookingDecisionPostgresTests {
         when(authorizationClient.currentBearerToken()).thenReturn(TOKEN);
     }
 
+    private void configureExtensionAuthorization(Reservation reservation, UUID decisionActorId) {
+        UUID requesterId = reservation.getBookingRequest().getRequestedByUserId();
+        when(authorizationClient.authorizeCurrentCaller(any(BookingAuthorizationRequest.class)))
+                .thenAnswer(invocation -> {
+                    BookingAuthorizationRequest request = invocation.getArgument(0);
+                    return switch (request.action()) {
+                        case EXTENSION_REQUEST -> requesterId;
+                        case EXTENSION_DECIDE -> decisionActorId;
+                        default -> null;
+                    };
+                });
+    }
+
     private void configureOwnerValidation(BookingRequest request, int releaseBufferMinutes) {
         when(ownerServicesClient.validateRequest(any(BookingRequestFacts.class), eq(TOKEN), any(Instant.class)))
+                .thenAnswer(invocation -> references(invocation.getArgument(0), releaseBufferMinutes));
+        when(ownerServicesClient.validateExtension(any(BookingRequestFacts.class), eq(TOKEN), any(Instant.class)))
                 .thenAnswer(invocation -> references(invocation.getArgument(0), releaseBufferMinutes));
     }
 

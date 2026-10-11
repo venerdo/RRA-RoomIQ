@@ -120,4 +120,16 @@ public class Reservation extends BookingEntity {
         status = ReservationStatus.CANCELLED;
         return true;
     }
+
+    public boolean extendTo(Instant newEndAt, int newReleaseBufferMinutes, PGobject newOccupiedPeriod) {
+        if ((status != ReservationStatus.CONFIRMED && status != ReservationStatus.IN_PROGRESS)
+                || newEndAt == null || !newEndAt.isAfter(endAt) || newReleaseBufferMinutes < 0
+                || newOccupiedPeriod == null) {
+            return false;
+        }
+        endAt = newEndAt;
+        releaseBufferMinutes = newReleaseBufferMinutes;
+        occupiedPeriod = newOccupiedPeriod;
+        return true;
+    }
 }

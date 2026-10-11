@@ -60,4 +60,13 @@ public class ReservationOccurrence extends BookingEntity {
     public void releaseOccupancy() {
         occupancyActive = false;
     }
+
+    public boolean extendTo(Instant newEndAt, PGobject newOccupiedPeriod) {
+        if (!occupancyActive || newEndAt == null || !newEndAt.isAfter(endAt) || newOccupiedPeriod == null) {
+            return false;
+        }
+        endAt = newEndAt;
+        occupiedPeriod = newOccupiedPeriod;
+        return true;
+    }
 }

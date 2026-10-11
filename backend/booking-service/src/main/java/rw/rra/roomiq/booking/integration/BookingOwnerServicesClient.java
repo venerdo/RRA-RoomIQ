@@ -89,6 +89,15 @@ public class BookingOwnerServicesClient {
     }
 
     public ValidatedBookingReferences validateRequest(BookingRequestFacts facts, String bearerToken, Instant now) {
+        return validateRequest(facts, bearerToken, now, true);
+    }
+
+    public ValidatedBookingReferences validateExtension(BookingRequestFacts facts, String bearerToken, Instant now) {
+        return validateRequest(facts, bearerToken, now, false);
+    }
+
+    private ValidatedBookingReferences validateRequest(BookingRequestFacts facts, String bearerToken, Instant now,
+                                                       boolean enforceAdvancePolicy) {
         requireBearer(bearerToken);
         if (facts == null || now == null) {
             throw invalidRequest();
@@ -193,7 +202,7 @@ public class BookingOwnerServicesClient {
                     facts.officeBuildingId(), facts.recurrenceRuleId(), occurrence.startsAt(), occurrence.endsAt(),
                     facts.attendeeCount(), facts.externalGuests());
             RoomRuleReference occurrenceRule = effectiveRule(roomRules, buildingRules, occurrence.startsAt());
-            validateRoomPolicy(occurrenceFacts, occurrenceRule, now);
+            validateRoomPolicy(occurrenceFacts, occurrenceRule, now, enforceAdvancePolicy);
             approvalRequired |= occurrenceRule.approvalRequired();
             releaseBufferMinutes = Math.max(releaseBufferMinutes, occurrenceRule.releaseBufferMinutes());
         }
@@ -333,7 +342,8 @@ public class BookingOwnerServicesClient {
         }
     }
 
-    private static void validateRoomPolicy(BookingRequestFacts facts, RoomRuleReference rule, Instant now) {
+    private static void validateRoomPolicy(BookingRequestFacts facts, RoomRuleReference rule, Instant now,
+                                           boolean enforceAdvancePolicy) {
         if (rule == null) {
             throw unavailable("ROOM_BOOKING_POLICY_UNAVAILABLE");
         }
@@ -343,7 +353,7 @@ public class BookingOwnerServicesClient {
         if (facts.startsAt() == null || facts.endsAt() == null || !facts.endsAt().isAfter(facts.startsAt())) {
             throw invalidRequest();
         }
-        if (facts.startsAt().isBefore(now)) {
+        if (enforceAdvancePolicy && facts.startsAt().isBefore(now)) {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "BOOKING_START_IN_PAST",
                     "Requested start time must not be in the past");
         }
@@ -354,11 +364,15 @@ public class BookingOwnerServicesClient {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "ROOM_DURATION_POLICY_VIOLATION",
                     "Requested duration is outside the active room policy");
         }
-        Duration advance = Duration.between(now, facts.startsAt());
-        if (rule.minAdvanceMinutes() != null && advance.compareTo(Duration.ofMinutes(rule.minAdvanceMinutes())) < 0
-                || rule.maxAdvanceDays() != null && advance.compareTo(Duration.ofDays(rule.maxAdvanceDays())) > 0) {
-            throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "ROOM_ADVANCE_POLICY_VIOLATION",
-                    "Requested time is outside the active room booking window");
+        if (enforceAdvancePolicy) {
+            Duration advance = Duration.between(now, facts.startsAt());
+            if (rule.minAdvanceMinutes() != null
+                    && advance.compareTo(Duration.ofMinutes(rule.minAdvanceMinutes())) < 0
+                    || rule.maxAdvanceDays() != null
+                    && advance.compareTo(Duration.ofDays(rule.maxAdvanceDays())) > 0) {
+                throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "ROOM_ADVANCE_POLICY_VIOLATION",
+                        "Requested time is outside the active room booking window");
+            }
         }
         if (facts.recurrenceRuleId() != null && !rule.recurringAllowed()) {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "ROOM_RECURRENCE_NOT_ALLOWED",

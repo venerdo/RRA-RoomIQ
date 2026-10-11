@@ -134,6 +134,9 @@ class BookingServiceApplicationTests {
                 "/api/v1/reservations/{reservationId}/check-in",
                 "/api/v1/reservations/{reservationId}/complete",
                 "/api/v1/reservations/{reservationId}/cancel",
+                "/api/v1/reservations/{reservationId}/extensions",
+                "/api/v1/booking-extensions/{extensionId}/decision",
+                "/api/v1/booking-extensions/{extensionId}/cancel",
                 "/api/v1/meetings/{meetingId}",
                 "/api/v1/meetings/{meetingId}/participants",
                 "/api/v1/meetings/{meetingId}/participants/{participantId}");

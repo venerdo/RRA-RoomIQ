@@ -104,6 +104,31 @@ class BookingOwnerServicesClientTests {
     }
 
     @Test
+    void extensionValidationDoesNotReapplyBookingAdvanceWindowToAnExistingReservation() {
+        expectBaseOwnerData("""
+                [{"id":"%s","roomId":"%s","officeBuildingId":null,"minDurationMinutes":30,
+                  "maxDurationMinutes":120,"minAdvanceMinutes":60,"maxAdvanceDays":1,
+                  "cancellationDeadlineMinutes":null,"recurringAllowed":false,
+                  "externalGuestsAllowed":true,"approvalRequired":false,"outsideHoursAllowed":false,
+                  "releaseBufferMinutes":5,"active":true,"effectiveFrom":null,
+                  "allowedDepartmentIds":["%s"]}]
+                """.formatted(UUID.randomUUID(), roomId, departmentId));
+        expectScheduling(null, """
+                {"workingCalendarId":"%s","recurrenceRuleId":null,"timezone":"Africa/Kigali","valid":true,
+                 "occurrencesEvaluated":1,"occurrences":[{"date":"2026-10-10"}],"violations":[],
+                 "occurrenceIntervals":[{"occurrenceDate":"2026-10-10","startsAt":"%s","endsAt":"%s"}]}
+                """.formatted(calendarId, startsAt, endsAt));
+        expectGet(ROOM_URL, "/api/v1/rooms/" + roomId + "/maintenance-periods",
+                """
+                {"success":true,"message":"ok","data":[]}
+                """);
+
+        var result = client.validateExtension(facts(), TOKEN, startsAt.plusSeconds(300));
+
+        assertThat(result.occurrences()).hasSize(1);
+    }
+
+    @Test
     void validatesEachRecurringOccurrenceAgainstItsEffectiveRoomRuleAndTimezone() {
         UUID recurrenceRuleId = UUID.randomUUID();
         Instant secondStart = startsAt.plusSeconds(86_400);

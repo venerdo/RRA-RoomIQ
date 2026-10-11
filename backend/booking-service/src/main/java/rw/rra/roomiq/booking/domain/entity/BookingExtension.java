@@ -81,4 +81,21 @@ public class BookingExtension extends BookingEntity {
     public String getIdempotencyKey() { return idempotencyKey; }
     public Instant getRequestedAt() { return requestedAt; }
     public Instant getDecidedAt() { return decidedAt; }
+
+    public boolean decide(BookingExtensionStatus decision, UUID actorUserId, String comment,
+                          Instant decidedAt, Instant approvedEndAt) {
+        if (status != BookingExtensionStatus.PENDING || decision == null
+                || decision == BookingExtensionStatus.PENDING || actorUserId == null || decidedAt == null
+                || decision == BookingExtensionStatus.APPROVED
+                && (approvedEndAt == null || !approvedEndAt.equals(requestedEndAt))
+                || decision != BookingExtensionStatus.APPROVED && approvedEndAt != null) {
+            return false;
+        }
+        this.status = decision;
+        this.decidedByUserId = actorUserId;
+        this.decisionComment = comment;
+        this.decidedAt = decidedAt;
+        this.approvedEndAt = approvedEndAt;
+        return true;
+    }
 }

@@ -3,7 +3,7 @@
   "project": "RRA RoomIQ",
   "stage": "Stage 6",
   "status": "stage-6-in-progress",
-  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-11 are complete and verified. Booking exposes protected request, decision, direct-booking, reservation lifecycle, meeting, participant, cancellation, extension, and share-link management operations; none is routed through the API Gateway. The only deliberately unauthenticated Booking route is GET /api/v1/public/meetings/{token}, which returns an explicit public-card allowlist. Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Share-link creation requires current Identity MANAGE authorization and approved/confirmed Booking state, and obtains the IANA timezone from Organization. Public reads persist view counts, enforce expiry/revocation under a row lock, and resolve SHA-256 token hashes. The user explicitly approved only the MEETING_SHARE_LINK.timezone VARCHAR(64) NOT NULL ERD addition; Flyway V5 refuses to invent timezones for legacy rows. Focused S6-11 tests passed 32/32, the Booking module suite passed 118/118, Identity 53/53, common-web 6/6, and the full 11-module backend reactor 291/291, with zero failures, errors, or skips. The user-approved nullable reservation.completed_at integrity is enforced by Flyway V3. Recurring booking conflicts remain all-or-nothing.",
+  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-13 are complete and verified; S6-14 remains proposed and not started. Booking exposes protected request, decision, direct-booking, reservation lifecycle, meeting, participant, cancellation, extension, share-link management, and internal occupancy operations; none is routed through the API Gateway. The only deliberately unauthenticated Booking route is GET /api/v1/public/meetings/{token}, which returns an explicit public-card allowlist. Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Share-link creation requires current Identity MANAGE authorization and approved/confirmed Booking state, obtains the IANA timezone from Organization, and requires Idempotency-Key. Request/direct-booking, extension, and share-link creation serialize retries with PostgreSQL transaction-scoped advisory locks; same-key payload conflicts are explicit. Share-link tokens are deterministically reproduced from the authenticated creator, key, and versioned HMAC key ring, while only token hashes are persisted. Cancellation replay requires the same authorized actor and equivalent payload. The user approved nullable MEETING_SHARE_LINK.idempotency_key VARCHAR(128) and UNIQUE(created_by_user_id, idempotency_key); Flyway V6 preserves null for legacy rows. S6-13 persists versioned occupancy events in the explicitly approved BOOKING_EVENT_OUTBOX schema in the same transaction as occupancy changes; an at-least-once relay publishes after commit and consumers deduplicate by eventId. Focused S6-13 outbox tests passed 20/20, Booking 138/138, Identity 53/53, common-web 6/6, and the full 11-module backend reactor 311/311, with zero failures, errors, or skips. The user-approved nullable reservation.completed_at integrity is enforced by Flyway V3. Recurring booking conflicts remain all-or-nothing.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -974,31 +974,33 @@
       "bookingOccupancyApiContract": {
         "operation": "POST /api/v1/internal/availability/occupancy",
         "contractVersion": "v1",
+        "implementationStatus": "Booking provider implemented by S6-13; protected by the service bearer interceptor, hidden from generated public OpenAPI, and not configured on the API Gateway.",
         "request": {
           "fields": ["roomIds", "startsAt", "endsAt", "contractVersion"],
           "contractVersionValue": "v1",
-          "timeRange": "Absolute Instants for the requested half-open range."
+          "timeRange": "Absolute Instants for the requested positive half-open range.",
+          "validation": "roomIds must contain 1-5000 unique non-null UUIDs; startsAt must be before endsAt; contractVersion must equal v1."
         },
         "response": {
           "envelope": "Shared ApiResponse",
           "dataFields": ["snapshotAt", "rooms"],
           "roomFields": ["roomId", "intervals"],
           "intervalFields": ["startsAt", "endsAt"],
-          "completeness": "Every requested room must appear exactly once, even when it has no occupied intervals. Occupied intervals must be finite and half-open."
+          "completeness": "Every requested room must appear exactly once, even when it has no occupied intervals. Occupied intervals must be finite and half-open; Booking returns the full stored interval, not a range clipped to the query."
         },
         "freshnessSecondsMaximum": 30,
         "intervalOwnership": "Booking returns its authoritative occupied intervals inclusive of its configured release buffer; Scheduling does not add a buffer.",
-        "failurePolicy": "Missing, unavailable, unauthorized, malformed, incomplete, or stale snapshots fail closed. No missing/failed response may be interpreted as zero occupancy. Until S6 implements the Booking provider, candidate-producing searches return 503 BOOKING_OCCUPANCY_UNAVAILABLE.",
+        "failurePolicy": "Missing, unavailable, unauthorized, malformed, incomplete, or stale snapshots fail closed. No missing/failed response may be interpreted as zero occupancy. Invalid requests return a stable client error; database query failures return 503 BOOKING_OCCUPANCY_UNAVAILABLE.",
         "timeouts": {"connectSeconds": 2, "readSeconds": 5}
       },
       "bookingOccupancyEventContract": {
-        "status": "Defined for future Booking outbox publication; no event consumer or cached occupancy state is implemented in S5-06.",
+        "status": "Implemented. Booking persists the versioned event to the user-approved BOOKING_EVENT_OUTBOX in the occupancy-changing transaction and relays it after commit. Scheduling has no event consumer or cached occupancy state; synchronous snapshots remain authoritative.",
         "eventVersion": "v1",
         "eventType": "booking.occupancy.changed",
         "fields": ["eventId", "eventVersion", "reservationId", "roomId", "action", "reservationVersion", "occurredAt", "occupiedInterval"],
         "actions": ["UPSERT", "REMOVE"],
         "occupiedInterval": "For UPSERT, the finite half-open interval includes Booking's release buffer. REMOVE identifies the reservation and room with no active occupied interval.",
-        "deliverySemantics": "Booking publishes after transaction commit from its outbox. eventId supports deduplication; reservationVersion increases monotonically per reservation so consumers can ignore stale/out-of-order updates. Events are notifications/invalidation only and never replace the synchronous authoritative occupancy snapshot."
+        "deliverySemantics": "The transactional outbox relay claims rows with FOR UPDATE SKIP LOCKED, requires a positive correlated publisher confirm and no mandatory return before marking delivery, and persists capped retry/backoff metadata on failure. Delivery is at-least-once; consumers deduplicate by eventId. reservationVersion increases monotonically per reservation; consumers ignore only strictly older versions and must process distinct events at an equal version, including recurring occurrence events. Events are notifications/invalidation only and never replace the synchronous authoritative occupancy snapshot."
       },
       "emptyAndRecurringResults": "If no preliminary candidate windows exist, the API may return an empty list without calling Booking and sets bookingOccupancyIncluded=false. Candidate-producing searches require successful occupancy inclusion and otherwise fail closed. Recurring results are occurrence-level only; Booking must validate the full series before confirmation.",
       "apiContract": "Scheduling-owned validated request/response DTOs, shared ApiResponse/ApiError envelopes, X-Correlation-ID, protected OpenAPI. The API is read-only and writes no Room maintenance or Booking occupancy.",
@@ -1052,8 +1054,8 @@
       "S6-09": "complete",
       "S6-10": "complete",
       "S6-11": "complete",
-      "S6-12": "not-started",
-      "S6-13": "not-started",
+      "S6-12": "complete",
+      "S6-13": "complete",
       "S6-14": "not-started"
     },
     "persistenceTables": [
@@ -1065,7 +1067,8 @@
       "meeting_participant",
       "meeting_share_link",
       "booking_extension",
-      "cancellation"
+      "cancellation",
+      "booking_event_outbox"
     ],
     "verification": {
       "focusedBookingPostgreSql": {
@@ -1088,7 +1091,7 @@
       },
       "fullBackendReactor": {
         "modules": 11,
-        "passed": 282,
+        "passed": 311,
         "failed": 0,
         "errors": 0,
         "skipped": 0
@@ -1111,6 +1114,18 @@
       },
       "focusedS6-11MeetingShareLinks": {
         "passed": 32,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "focusedS6-13OutboxTransactions": {
+        "passed": 20,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "bookingModuleSuiteS6-13": {
+        "passed": 138,
         "failed": 0,
         "errors": 0,
         "skipped": 0,
@@ -1147,6 +1162,47 @@
         "fullBackendReactor": {
           "modules": 11,
           "passed": 291,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      },
+      "focusedS6-12ReplaySemantics": {
+        "passed": 66,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "coverage": [
+          "request and direct-booking same-key replay and payload conflict",
+          "extension same-key replay, payload conflict, and concurrent retries",
+          "cancellation replay actor/payload checks",
+          "share-link deterministic token replay, payload conflict, revocation preservation, and key rotation",
+          "transaction-scoped advisory-lock concurrency",
+          "no duplicate decisions, reservations, cancellations, extensions, or share tokens"
+        ]
+      },
+      "fullS6-12Regressions": {
+        "bookingModule": {
+          "passed": 125,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "identityService": {
+          "passed": 53,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "commonWeb": {
+          "passed": 6,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "fullBackendReactor": {
+          "modules": 11,
+          "passed": 298,
           "failed": 0,
           "errors": 0,
           "skipped": 0
@@ -1302,15 +1358,24 @@
       }
     },
     "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
-    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, POST /api/v1/booking-requests/{requestId}/cancel, POST /api/v1/bookings/direct, POST /api/v1/reservations/{reservationId}/check-in, POST /api/v1/reservations/{reservationId}/complete, POST /api/v1/reservations/{reservationId}/cancel, POST /api/v1/reservations/{reservationId}/extensions, POST /api/v1/booking-extensions/{extensionId}/decision, POST /api/v1/booking-extensions/{extensionId}/cancel, GET /api/v1/meetings/{meetingId}, GET/POST /api/v1/meetings/{meetingId}/participants, DELETE /api/v1/meetings/{meetingId}/participants/{participantId}, POST /api/v1/meetings/{meetingId}/share-links, and POST /api/v1/meeting-share-links/{shareLinkId}/revoke. All management operations require bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The sole deliberately unauthenticated Booking data route is GET /api/v1/public/meetings/{token}, returning only title, startAt, endAt, timezone, and organizerDisplayName. The direct and recurring flows use the approved reservation_occurrence model.",
+    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, POST /api/v1/booking-requests/{requestId}/cancel, POST /api/v1/bookings/direct, POST /api/v1/reservations/{reservationId}/check-in, POST /api/v1/reservations/{reservationId}/complete, POST /api/v1/reservations/{reservationId}/cancel, POST /api/v1/reservations/{reservationId}/extensions, POST /api/v1/booking-extensions/{extensionId}/decision, POST /api/v1/booking-extensions/{extensionId}/cancel, GET /api/v1/meetings/{meetingId}, GET/POST /api/v1/meetings/{meetingId}/participants, DELETE /api/v1/meetings/{meetingId}/participants/{participantId}, POST /api/v1/meetings/{meetingId}/share-links, POST /api/v1/meeting-share-links/{shareLinkId}/revoke, and internal POST /api/v1/internal/availability/occupancy (v1). All protected operations require bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The sole deliberately unauthenticated Booking data route is GET /api/v1/public/meetings/{token}, returning only title, startAt, endAt, timezone, and organizerDisplayName. The direct and recurring flows use the approved reservation_occurrence model.",
     "shareLinkOperations": {
       "protectedManagement": [
         {
           "method": "POST",
           "path": "/api/v1/meetings/{meetingId}/share-links",
           "authorization": "Bearer-authenticated; rechecks current Identity MANAGE authorization and persisted scope. Caller cannot provide organizer identity or trusted display name.",
-          "eligibility": "Requires an approved booking request and confirmed reservation. Obtains active building IANA timezone from Organization with caller-token propagation; missing, invalid, or unavailable owner data fails closed.",
-          "success": "Returns the opaque raw token once at creation. It is never persisted or returned again."
+          "eligibility": "A new link requires an approved booking request and confirmed reservation. Obtains active building IANA timezone from Organization with caller-token propagation; missing, invalid, or unavailable owner data fails closed.",
+          "idempotency": {
+            "header": "Idempotency-Key",
+            "required": true,
+            "format": "1-128 ASCII characters matching [A-Za-z0-9._:-]",
+            "scope": "Authenticated creator UUID plus the protected share-link creation operation",
+            "equivalentReplay": "Returns the same shareLinkId, expiry, and deterministically reproduced token with replayed=true; the initial response has replayed=false.",
+            "conflict": "Same creator/key with a different meeting or expiry returns HTTP 409 IDEMPOTENCY_KEY_CONFLICT.",
+            "revokedOrExpiredReplay": "Returns the same original token and persisted link without restoring it; public access remains denied by expiry/revocation."
+          },
+          "success": "Returns the versioned opaque token only in this protected create/replay response. Booking persists only its SHA-256 hash."
         },
         {
           "method": "POST",
@@ -1323,7 +1388,7 @@
         "method": "GET",
         "path": "/api/v1/public/meetings/{token}",
         "authentication": "The only deliberately unauthenticated Booking data route; the route/method exception is narrowly scoped and does not expose any other Booking route.",
-        "token": "256 cryptographically random bits encoded as unpadded base64url. Booking persists only the SHA-256 hash. Invalid, expired, and revoked tokens use the same not-found response.",
+        "token": "Versioned v1.<key-version>.<base64url(HMAC-SHA-256)> token derived from the authenticated creator UUID, operation scope, and idempotency key with a dedicated secret key ring. The HMAC output has 256 bits; Booking persists only the SHA-256 hash. Invalid, expired, and revoked tokens use the same not-found response.",
         "response": {
           "envelope": "ApiResponse<PublicMeetingCardResponse>",
           "dataFields": [
@@ -1342,7 +1407,8 @@
           "PUBLIC_SHARE_RATE_LIMITED",
           "SHARE_LINK_VIEW_COUNT_EXHAUSTED"
         ],
-        "schemaChange": "The user explicitly approved only MEETING_SHARE_LINK.timezone VARCHAR(64) NOT NULL, populated using Organization data at creation. Flyway V5 fails if legacy share-link rows lack an authoritative timezone instead of fabricating one.",
+        "schemaChange": "S6-11 approved MEETING_SHARE_LINK.timezone VARCHAR(64) NOT NULL, populated using Organization data at creation. S6-12 additionally approved nullable idempotency_key VARCHAR(128) and UNIQUE(created_by_user_id, idempotency_key); null preserves legacy rows. Flyway V5 fails if legacy share-link rows lack an authoritative timezone instead of fabricating one; Flyway V6 adds the idempotency field, format check, and scoped uniqueness.",
+        "secretConfiguration": "BOOKING_SHARE_TOKEN_KEY_RING contains comma-separated version=unpadded-base64url-secret entries, each decoding to at least 32 bytes; BOOKING_SHARE_TOKEN_ACTIVE_KEY_VERSION selects the key for new links. Keep previous versions while old keys may be replayed. Missing, invalid, or hash-mismatched key material fails closed and does not mint a replacement token.",
         "gateway": "No Booking API Gateway route is configured."
       }
     },
@@ -1631,7 +1697,7 @@
     },
     "callerControlledFields": "Requester identity, cancellation actor, request type, status, approval outcome, and organizational authorization are derived from persisted data, Identity, and owner services, not caller-supplied payload fields.",
     "gateway": "No Booking route is configured on the API Gateway; publication and routing remain deferred to Stage 11.",
-    "futureWorkflows": "Share links and the Booking occupancy provider are not exposed."
+    "futureWorkflows": "Booking's occupancy snapshot provider is a protected internal integration and is not Gateway-routed or included in public OpenAPI. Versioned occupancy events are transactionally recorded in the user-approved Booking outbox and published after commit; Scheduling currently has no event consumer and continues to use the fresh synchronous Booking snapshot as authoritative."
   },
   "authorizationPolicyDocumentation": "identity-service/AUTHORIZATION.md",
   "authorization": {

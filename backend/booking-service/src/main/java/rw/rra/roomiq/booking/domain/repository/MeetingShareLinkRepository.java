@@ -11,6 +11,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface MeetingShareLinkRepository extends JpaRepository<MeetingShareLink, UUID> {
+    Optional<MeetingShareLink> findByCreatedByUserIdAndIdempotencyKey(UUID createdByUserId, String idempotencyKey);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select link from MeetingShareLink link where link.tokenHash = :tokenHash")
     Optional<MeetingShareLink> findByTokenHashForUpdate(@Param("tokenHash") String tokenHash);

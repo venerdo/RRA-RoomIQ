@@ -52,6 +52,7 @@ class BookingDirectBookingServiceTests {
     private final BookingAuthorizationClient authorizationClient = mock(BookingAuthorizationClient.class);
     private final BookingOwnerServicesClient ownerServicesClient = mock(BookingOwnerServicesClient.class);
     private final BookingConfirmationService confirmationService = mock(BookingConfirmationService.class);
+    private final PostgresIdempotencyLock idempotencyLock = mock(PostgresIdempotencyLock.class);
 
     private final UUID actorId = UUID.randomUUID();
     private final UUID buildingId = UUID.randomUUID();
@@ -65,7 +66,7 @@ class BookingDirectBookingServiceTests {
     @BeforeEach
     void setUp() {
         service = new BookingDirectBookingService(requests, reservations, occurrences, meetings,
-                authorizationClient, ownerServicesClient, confirmationService,
+                authorizationClient, ownerServicesClient, confirmationService, idempotencyLock,
                 Clock.fixed(NOW, ZoneOffset.UTC));
         MockHttpServletRequest servletRequest = new MockHttpServletRequest();
         servletRequest.addHeader("Authorization", TOKEN);

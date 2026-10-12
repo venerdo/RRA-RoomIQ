@@ -45,22 +45,26 @@ public class BookingRequestService {
     private final BookingRequestRepository repository;
     private final BookingAuthorizationClient authorizationClient;
     private final BookingOwnerServicesClient ownerServicesClient;
+    private final PostgresIdempotencyLock idempotencyLock;
     private final Clock clock;
 
     @Autowired
     public BookingRequestService(BookingRequestRepository repository,
                                  BookingAuthorizationClient authorizationClient,
-                                 BookingOwnerServicesClient ownerServicesClient) {
-        this(repository, authorizationClient, ownerServicesClient, Clock.systemUTC());
+                                 BookingOwnerServicesClient ownerServicesClient,
+                                 PostgresIdempotencyLock idempotencyLock) {
+        this(repository, authorizationClient, ownerServicesClient, idempotencyLock, Clock.systemUTC());
     }
 
     BookingRequestService(BookingRequestRepository repository,
                           BookingAuthorizationClient authorizationClient,
                           BookingOwnerServicesClient ownerServicesClient,
+                          PostgresIdempotencyLock idempotencyLock,
                           Clock clock) {
         this.repository = repository;
         this.authorizationClient = authorizationClient;
         this.ownerServicesClient = ownerServicesClient;
+        this.idempotencyLock = idempotencyLock;
         this.clock = clock;
     }
 
@@ -84,6 +88,7 @@ public class BookingRequestService {
         }
 
         if (idempotencyKey != null) {
+            idempotencyLock.acquire("booking-request:create", idempotencyKey);
             Optional<BookingRequest> existing = repository.findByIdempotencyKey(idempotencyKey);
             if (existing.isPresent()) {
                 BookingRequest prior = existing.get();

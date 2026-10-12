@@ -44,6 +44,7 @@ public class BookingDirectBookingService {
     private final BookingAuthorizationClient authorizationClient;
     private final BookingOwnerServicesClient ownerServicesClient;
     private final BookingConfirmationService confirmationService;
+    private final PostgresIdempotencyLock idempotencyLock;
     private final Clock clock;
 
     @Autowired
@@ -53,9 +54,10 @@ public class BookingDirectBookingService {
                                        MeetingRepository meetings,
                                        BookingAuthorizationClient authorizationClient,
                                        BookingOwnerServicesClient ownerServicesClient,
-                                       BookingConfirmationService confirmationService) {
+                                       BookingConfirmationService confirmationService,
+                                       PostgresIdempotencyLock idempotencyLock) {
         this(requests, reservations, occurrences, meetings, authorizationClient, ownerServicesClient,
-                confirmationService, Clock.systemUTC());
+                confirmationService, idempotencyLock, Clock.systemUTC());
     }
 
     BookingDirectBookingService(BookingRequestRepository requests,
@@ -65,6 +67,7 @@ public class BookingDirectBookingService {
                                 BookingAuthorizationClient authorizationClient,
                                 BookingOwnerServicesClient ownerServicesClient,
                                 BookingConfirmationService confirmationService,
+                                PostgresIdempotencyLock idempotencyLock,
                                 Clock clock) {
         this.requests = requests;
         this.reservations = reservations;
@@ -73,6 +76,7 @@ public class BookingDirectBookingService {
         this.authorizationClient = authorizationClient;
         this.ownerServicesClient = ownerServicesClient;
         this.confirmationService = confirmationService;
+        this.idempotencyLock = idempotencyLock;
         this.clock = clock;
     }
 
@@ -102,6 +106,7 @@ public class BookingDirectBookingService {
         }
 
         if (idempotencyKey != null) {
+            idempotencyLock.acquire("booking-request:create", idempotencyKey);
             Optional<BookingRequest> existing = requests.findByIdempotencyKey(idempotencyKey);
             if (existing.isPresent()) {
                 BookingRequest prior = existing.get();

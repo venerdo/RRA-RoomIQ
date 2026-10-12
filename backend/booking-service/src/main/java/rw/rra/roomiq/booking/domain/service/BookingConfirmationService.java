@@ -54,6 +54,7 @@ public class BookingConfirmationService {
     private final MeetingRepository meetings;
     private final MeetingParticipantRepository participants;
     private final BookingOwnerServicesClient ownerServicesClient;
+    private final BookingOccupancyOutboxService occupancyOutbox;
 
     @Autowired
     public BookingConfirmationService(BookingRequestRepository bookingRequests,
@@ -61,13 +62,15 @@ public class BookingConfirmationService {
                                       ReservationOccurrenceRepository occurrences,
                                       MeetingRepository meetings,
                                       MeetingParticipantRepository participants,
-                                      BookingOwnerServicesClient ownerServicesClient) {
+                                      BookingOwnerServicesClient ownerServicesClient,
+                                      BookingOccupancyOutboxService occupancyOutbox) {
         this.bookingRequests = bookingRequests;
         this.reservations = reservations;
         this.occurrences = occurrences;
         this.meetings = meetings;
         this.participants = participants;
         this.ownerServicesClient = ownerServicesClient;
+        this.occupancyOutbox = occupancyOutbox;
     }
 
     @Transactional
@@ -143,6 +146,7 @@ public class BookingConfirmationService {
                 throw exception;
             }
         }
+        occupancyOutbox.recordUpserts(reservation, reservationOccurrences, confirmedAt);
         meetings.saveAndFlush(meeting);
         participants.saveAndFlush(organizer);
         bookingRequests.saveAndFlush(bookingRequest);

@@ -50,6 +50,8 @@ class BookingRequestServiceTests {
     private BookingAuthorizationClient authorizationClient;
     @Mock
     private BookingOwnerServicesClient ownerServicesClient;
+    @Mock
+    private PostgresIdempotencyLock idempotencyLock;
 
     private BookingRequestService service;
     private UUID actorId;
@@ -60,7 +62,7 @@ class BookingRequestServiceTests {
 
     @BeforeEach
     void setUp() {
-        service = new BookingRequestService(repository, authorizationClient, ownerServicesClient,
+        service = new BookingRequestService(repository, authorizationClient, ownerServicesClient, idempotencyLock,
                 Clock.fixed(NOW, ZoneOffset.UTC));
         actorId = UUID.randomUUID();
         buildingId = UUID.randomUUID();

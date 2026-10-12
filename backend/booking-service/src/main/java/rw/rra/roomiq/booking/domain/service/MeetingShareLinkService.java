@@ -22,17 +22,12 @@ import rw.rra.roomiq.booking.integration.MeetingAuthorizationRequest;
 import rw.rra.roomiq.booking.integration.MeetingAuthorizationResponse;
 import rw.rra.roomiq.common.web.DomainException;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
-import java.util.HexFormat;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -41,40 +36,50 @@ import static rw.rra.roomiq.booking.integration.MeetingAuthorizationRequest.Acti
 
 @Service
 public class MeetingShareLinkService {
-    private static final SecureRandom RANDOM = new SecureRandom();
-    private static final Pattern TOKEN_PATTERN = Pattern.compile("[A-Za-z0-9_-]{43}");
+    private static final Pattern TOKEN_PATTERN = Pattern.compile("v1\\.[A-Za-z0-9_-]{1,32}\\.[A-Za-z0-9_-]{43}");
     private final MeetingRepository meetings;
     private final ReservationRepository reservations;
     private final MeetingShareLinkRepository shareLinks;
     private final BookingAuthorizationClient authorization;
     private final BookingOwnerServicesClient ownerServices;
+    private final PostgresIdempotencyLock idempotencyLock;
+    private final ShareLinkTokenService tokenService;
     private final Clock clock;
 
     @Autowired
     public MeetingShareLinkService(MeetingRepository meetings, ReservationRepository reservations,
                                    MeetingShareLinkRepository shareLinks,
                                    BookingAuthorizationClient authorization,
-                                   BookingOwnerServicesClient ownerServices) {
-        this(meetings, reservations, shareLinks, authorization, ownerServices, Clock.systemUTC());
+                                   BookingOwnerServicesClient ownerServices,
+                                   PostgresIdempotencyLock idempotencyLock,
+                                   ShareLinkTokenService tokenService) {
+        this(meetings, reservations, shareLinks, authorization, ownerServices, idempotencyLock,
+                tokenService, Clock.systemUTC());
     }
 
     MeetingShareLinkService(MeetingRepository meetings, ReservationRepository reservations,
                             MeetingShareLinkRepository shareLinks,
                             BookingAuthorizationClient authorization,
-                            BookingOwnerServicesClient ownerServices, Clock clock) {
+                            BookingOwnerServicesClient ownerServices,
+                            PostgresIdempotencyLock idempotencyLock,
+                            ShareLinkTokenService tokenService, Clock clock) {
         this.meetings = meetings;
         this.reservations = reservations;
         this.shareLinks = shareLinks;
         this.authorization = authorization;
         this.ownerServices = ownerServices;
+        this.idempotencyLock = idempotencyLock;
+        this.tokenService = tokenService;
         this.clock = clock;
     }
 
     @Transactional
-    public MeetingShareLinkCreatedResponse create(UUID meetingId, CreateMeetingShareLinkRequest request) {
-        if (meetingId == null || request == null) {
+    public MeetingShareLinkCreatedResponse create(UUID meetingId, CreateMeetingShareLinkRequest request,
+                                                  String idempotencyKey) {
+        if (meetingId == null || request == null || idempotencyKey == null) {
             throw invalidRequest();
         }
+        BookingRequestService.validateIdempotencyKey(idempotencyKey);
         Meeting initial = meetings.findById(meetingId).orElseThrow(MeetingShareLinkService::meetingNotFound);
         UUID reservationId = initial.getReservation().getId();
         Reservation reservation = reservations.findByIdForUpdate(reservationId)
@@ -83,25 +88,38 @@ public class MeetingShareLinkService {
                 .orElseThrow(MeetingShareLinkService::meetingNotFound);
         ensureConsistentFacts(meeting, reservation);
         MeetingAuthorizationResponse identity = authorizeManage(meeting);
-        ensureEligibleForCreation(meeting, reservation);
-        if (!meeting.updateOrganizerDisplayName(identity.organizerDisplayName())) {
-            throw new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "IDENTITY_AUTHORIZATION_UNAVAILABLE",
-                    "Identity did not return the trusted organizer display name");
-        }
-
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         Instant expiresAt = request.expiresAt() == null ? null
                 : request.expiresAt().truncatedTo(ChronoUnit.MICROS);
+        idempotencyLock.acquire("meeting-share-link:create:" + identity.actorUserId(), idempotencyKey);
+        MeetingShareLink prior = shareLinks.findByCreatedByUserIdAndIdempotencyKey(
+                identity.actorUserId(), idempotencyKey).orElse(null);
+        if (prior != null) {
+            if (!prior.getMeeting().getId().equals(meetingId)
+                    || !Objects.equals(prior.getExpiresAt(), expiresAt)) {
+                throw idempotencyConflict();
+            }
+            String token = tokenService.reproduceToken(identity.actorUserId(), idempotencyKey,
+                    prior.getTokenHash());
+            return new MeetingShareLinkCreatedResponse(prior.getId(), token, prior.getExpiresAt(), true);
+        }
+
+        ensureEligibleForCreation(meeting, reservation);
         if (expiresAt != null && !expiresAt.isAfter(now)) {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, "SHARE_LINK_EXPIRY_INVALID",
                     "Share-link expiry must be in the future");
         }
+        String rawToken = tokenService.createToken(identity.actorUserId(), idempotencyKey);
         String timezone = ownerServices.authoritativeBuildingTimezone(
                 reservation.getBookingRequest().getOfficeBuildingId(), authorization.currentBearerToken());
-        String rawToken = createToken();
+        if (!meeting.updateOrganizerDisplayName(identity.organizerDisplayName())) {
+            throw new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "IDENTITY_AUTHORIZATION_UNAVAILABLE",
+                    "Identity did not return the trusted organizer display name");
+        }
         MeetingShareLink link = shareLinks.saveAndFlush(new MeetingShareLink(
-                meeting, hashToken(rawToken), timezone, identity.actorUserId(), expiresAt, null, 0));
-        return new MeetingShareLinkCreatedResponse(link.getId(), rawToken, expiresAt);
+                meeting, ShareLinkTokenService.hashToken(rawToken), timezone, identity.actorUserId(),
+                idempotencyKey, expiresAt, null, 0));
+        return new MeetingShareLinkCreatedResponse(link.getId(), rawToken, expiresAt, false);
     }
 
     @Transactional
@@ -135,7 +153,7 @@ public class MeetingShareLinkService {
         if (token == null || !TOKEN_PATTERN.matcher(token).matches()) {
             throw publicCardNotFound();
         }
-        MeetingShareLink link = shareLinks.findByTokenHashForUpdate(hashToken(token))
+        MeetingShareLink link = shareLinks.findByTokenHashForUpdate(ShareLinkTokenService.hashToken(token))
                 .orElseThrow(MeetingShareLinkService::publicCardNotFound);
         Instant now = clock.instant();
         if (link.getRevokedAt() != null || link.getExpiresAt() != null && !link.getExpiresAt().isAfter(now)) {
@@ -204,21 +222,6 @@ public class MeetingShareLinkService {
                 link.getViewCount(), link.getTimezone());
     }
 
-    private static String createToken() {
-        byte[] token = new byte[32];
-        RANDOM.nextBytes(token);
-        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(token);
-    }
-
-    private static String hashToken(String token) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(token.getBytes(StandardCharsets.US_ASCII)));
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is not available", exception);
-        }
-    }
-
     private static DomainException invalidRequest() {
         return new DomainException(HttpStatus.BAD_REQUEST, "SHARE_LINK_REQUEST_INVALID",
                 "Share-link request is invalid");
@@ -241,5 +244,10 @@ public class MeetingShareLinkService {
     private static DomainException inconsistentFacts() {
         return new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "MEETING_FACTS_INCONSISTENT",
                 "Persisted meeting ownership or scope is inconsistent");
+    }
+
+    private static DomainException idempotencyConflict() {
+        return new DomainException(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_CONFLICT",
+                "The idempotency key was already used with a different meeting share-link request");
     }
 }

@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -36,6 +37,7 @@ public class BookingCancellationService {
     private final CancellationRepository cancellations;
     private final BookingAuthorizationClient authorizationClient;
     private final BookingOwnerServicesClient ownerServicesClient;
+    private final BookingOccupancyOutboxService occupancyOutbox;
     private final Clock clock;
 
     @Autowired
@@ -44,9 +46,10 @@ public class BookingCancellationService {
                                      ReservationOccurrenceRepository occurrences,
                                      CancellationRepository cancellations,
                                      BookingAuthorizationClient authorizationClient,
-                                     BookingOwnerServicesClient ownerServicesClient) {
+                                     BookingOwnerServicesClient ownerServicesClient,
+                                     BookingOccupancyOutboxService occupancyOutbox) {
         this(bookingRequests, reservations, occurrences, cancellations, authorizationClient,
-                ownerServicesClient, Clock.systemUTC());
+                ownerServicesClient, occupancyOutbox, Clock.systemUTC());
     }
 
     BookingCancellationService(BookingRequestRepository bookingRequests,
@@ -54,13 +57,15 @@ public class BookingCancellationService {
                                ReservationOccurrenceRepository occurrences,
                                CancellationRepository cancellations,
                                BookingAuthorizationClient authorizationClient,
-                               BookingOwnerServicesClient ownerServicesClient, Clock clock) {
+                               BookingOwnerServicesClient ownerServicesClient,
+                               BookingOccupancyOutboxService occupancyOutbox, Clock clock) {
         this.bookingRequests = bookingRequests;
         this.reservations = reservations;
         this.occurrences = occurrences;
         this.cancellations = cancellations;
         this.authorizationClient = authorizationClient;
         this.ownerServicesClient = ownerServicesClient;
+        this.occupancyOutbox = occupancyOutbox;
         this.clock = clock;
     }
 
@@ -74,6 +79,7 @@ public class BookingCancellationService {
         Cancellation prior = cancellations.findFirstByBookingRequest_IdOrderByCancelledAtDesc(requestId)
                 .orElse(null);
         if (prior != null) {
+            requireEquivalentReplay(prior, authorization.actorUserId(), request);
             return response(prior);
         }
         if (normalized(request.overrideReason()) != null) {
@@ -112,6 +118,7 @@ public class BookingCancellationService {
         Cancellation prior = cancellations.findFirstByReservation_IdOrderByCancelledAtDesc(reservationId)
                 .orElse(null);
         if (prior != null) {
+            requireEquivalentReplay(prior, authorization.actorUserId(), request);
             return response(prior);
         }
         if (reservation.getStatus() != ReservationStatus.CONFIRMED
@@ -142,9 +149,10 @@ public class BookingCancellationService {
         }
         List<ReservationOccurrence> reservationOccurrences =
                 occurrences.findAllByReservationIdForUpdate(reservationId);
-        reservationOccurrences.forEach(ReservationOccurrence::releaseOccupancy);
         reservations.saveAndFlush(reservation);
         bookingRequests.saveAndFlush(bookingRequest);
+        occupancyOutbox.recordRemovals(reservation, reservationOccurrences, now);
+        reservationOccurrences.forEach(ReservationOccurrence::releaseOccupancy);
         occurrences.saveAllAndFlush(reservationOccurrences);
         Cancellation cancellation = cancellations.saveAndFlush(new Cancellation(reservation, bookingRequest,
                 authorization.actorUserId(), request.reasonCode(), request.reason().trim(), deadline,
@@ -184,6 +192,17 @@ public class BookingCancellationService {
 
     private static String normalized(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static void requireEquivalentReplay(Cancellation prior, UUID actorUserId,
+                                                CancellationRequest request) {
+        if (!prior.getCancelledByUserId().equals(actorUserId)
+                || prior.getReasonCode() != request.reasonCode()
+                || !prior.getReason().equals(request.reason().trim())
+                || !Objects.equals(prior.getOverrideReason(), normalized(request.overrideReason()))) {
+            throw new DomainException(HttpStatus.CONFLICT, "CANCELLATION_REPLAY_CONFLICT",
+                    "The cancellation was already recorded with a different actor or payload");
+        }
     }
 
     private static CancellationResponse response(Cancellation cancellation) {

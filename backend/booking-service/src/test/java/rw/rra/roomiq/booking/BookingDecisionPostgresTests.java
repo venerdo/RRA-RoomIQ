@@ -22,7 +22,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import rw.rra.roomiq.booking.domain.dto.BookingDecisionRequest;
 import rw.rra.roomiq.booking.domain.dto.BookingExtensionDecisionRequest;
+import rw.rra.roomiq.booking.domain.dto.BookingExtensionResponse;
 import rw.rra.roomiq.booking.domain.dto.CancellationRequest;
+import rw.rra.roomiq.booking.domain.dto.CreateBookingRequest;
 import rw.rra.roomiq.booking.domain.dto.CreateBookingExtensionRequest;
 import rw.rra.roomiq.booking.domain.entity.BookingExtension;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
@@ -40,6 +42,7 @@ import rw.rra.roomiq.booking.domain.enums.ParticipantRole;
 import rw.rra.roomiq.booking.domain.enums.ReservationStatus;
 import rw.rra.roomiq.booking.domain.repository.ApprovalDecisionRepository;
 import rw.rra.roomiq.booking.domain.repository.BookingExtensionRepository;
+import rw.rra.roomiq.booking.domain.repository.BookingEventOutboxRepository;
 import rw.rra.roomiq.booking.domain.repository.BookingRequestRepository;
 import rw.rra.roomiq.booking.domain.repository.CancellationRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingParticipantRepository;
@@ -49,6 +52,7 @@ import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
 import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
 import rw.rra.roomiq.booking.domain.service.BookingExtensionService;
 import rw.rra.roomiq.booking.domain.service.BookingCancellationService;
+import rw.rra.roomiq.booking.domain.service.BookingRequestService;
 import rw.rra.roomiq.booking.domain.service.ReservationLifecycleService;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationRequest;
@@ -105,6 +109,7 @@ class BookingDecisionPostgresTests {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("roomiq.booking.event-relay.enabled", () -> "false");
     }
 
     @Autowired
@@ -115,6 +120,8 @@ class BookingDecisionPostgresTests {
     private BookingCancellationService cancellationService;
     @Autowired
     private BookingExtensionService extensionService;
+    @Autowired
+    private BookingRequestService bookingRequestService;
     @Autowired
     private BookingRequestRepository bookingRequests;
     @Autowired
@@ -127,6 +134,8 @@ class BookingDecisionPostgresTests {
     private ReservationOccurrenceRepository reservationOccurrences;
     @Autowired
     private BookingExtensionRepository extensions;
+    @Autowired
+    private BookingEventOutboxRepository outbox;
     @Autowired
     private MeetingRepository meetings;
     @Autowired
@@ -210,6 +219,18 @@ class BookingDecisionPostgresTests {
         assertThat(organizer.getInviteStatus()).isEqualTo(InviteStatus.ACCEPTED);
         assertThat(response.reservationId()).isEqualTo(reservation.getId());
         assertThat(response.meetingId()).isEqualTo(meeting.getId());
+        assertThat(outbox.findAll()).filteredOn(entry -> entry.getAggregateId().equals(reservation.getId()))
+                .hasSize(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT payload ->> 'action'
+                FROM booking_event_outbox
+                WHERE aggregate_id = ?
+                """, String.class, reservation.getId())).isEqualTo("UPSERT");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT payload ->> 'occupiedInterval'
+                FROM booking_event_outbox
+                WHERE aggregate_id = ?
+                """, String.class, reservation.getId())).contains("2030-04-10T11:15:00Z");
     }
 
     @Test
@@ -438,6 +459,15 @@ class BookingDecisionPostgresTests {
         assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
                 .singleElement().satisfies(occurrence ->
                         assertThat(occurrence.getEndAt()).isEqualTo(END.plusSeconds(3_600)));
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE aggregate_id = ? AND payload ->> 'action' = 'UPSERT'
+                """, Integer.class, reservation.getId())).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT payload -> 'occupiedInterval' ->> 'endsAt'
+                FROM booking_event_outbox
+                WHERE aggregate_id = ? AND payload ->> 'action' = 'UPSERT'
+                """, String.class, reservation.getId())).isEqualTo("2030-04-10T12:15:00Z");
         Long reservationEnd = jdbcTemplate.queryForObject("""
                 SELECT EXTRACT(EPOCH FROM upper(occupied_period))::bigint
                 FROM reservation WHERE id = ?
@@ -561,6 +591,66 @@ class BookingDecisionPostgresTests {
                 .isInstanceOf(DomainException.class)
                 .satisfies(error -> assertThat(((DomainException) error).code())
                         .isEqualTo("IDEMPOTENCY_KEY_CONFLICT"));
+    }
+
+    @Test
+    void concurrentExtensionRetriesWithSameKeyCreateOnlyOneExtension() throws Exception {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        configureExtensionAuthorization(reservation, UUID.randomUUID());
+        configureOwnerValidation(reservation.getBookingRequest(), 5);
+        CreateBookingExtensionRequest request = new CreateBookingExtensionRequest(END.plusSeconds(3_600));
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<BookingExtensionResponse> first =
+                    executor.submit(() -> requestExtension(reservation.getId(), request, ready, start));
+            Future<BookingExtensionResponse> second =
+                    executor.submit(() -> requestExtension(reservation.getId(), request, ready, start));
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            BookingExtensionResponse firstResult = first.get(30, TimeUnit.SECONDS);
+            BookingExtensionResponse secondResult = second.get(30, TimeUnit.SECONDS);
+            assertThat(firstResult.extensionId()).isEqualTo(secondResult.extensionId());
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(extensions.findAll()).filteredOn(extension -> extension.getReservation().getId()
+                .equals(reservation.getId())).hasSize(1);
+    }
+
+    @Test
+    void concurrentBookingRequestRetriesWithSameKeyCreateOnlyOneRequest() throws Exception {
+        UUID actorId = UUID.randomUUID();
+        UUID buildingId = UUID.randomUUID();
+        UUID departmentId = UUID.randomUUID();
+        UUID roomId = UUID.randomUUID();
+        when(authorizationClient.authorizeCurrentCaller(any(BookingAuthorizationRequest.class)))
+                .thenReturn(actorId);
+        configureOwnerValidation(new BookingRequest("BR-validation", BookingRequestType.SECRETARY_REQUEST,
+                actorId, departmentId, roomId, buildingId, null, "Retry test", null, START, END, 2,
+                false, BookingRequestStatus.DRAFT, null, Instant.now()), 5);
+        CreateBookingRequest request = new CreateBookingRequest(departmentId, roomId, buildingId,
+                null, "Retry test", null, START, END, 2, false);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> first =
+                    executor.submit(() -> createBookingRequest(request, ready, start));
+            Future<String> second =
+                    executor.submit(() -> createBookingRequest(request, ready, start));
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            String firstReference = first.get(30, TimeUnit.SECONDS);
+            String secondReference = second.get(30, TimeUnit.SECONDS);
+            assertThat(firstReference).isEqualTo(secondReference);
+        } finally {
+            executor.shutdownNow();
+        }
+        assertThat(bookingRequests.findAll())
+                .filteredOn(value -> "concurrent-request-key".equals(value.getIdempotencyKey())).hasSize(1);
     }
 
     @Test
@@ -699,6 +789,11 @@ class BookingDecisionPostgresTests {
         assertThat(reservationOccurrences.findAllByBookingRequestId(request.getId())).isEmpty();
         assertThat(meetingsForRequest(request.getId())).isZero();
         assertThat(participantsForRequest(request.getId())).isZero();
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox WHERE aggregate_id IN (
+                    SELECT id FROM reservation WHERE booking_request_id = ?
+                )
+                """, Integer.class, request.getId())).isZero();
         assertThat(reservationOccurrences.findAllByBookingRequestId(request.getId())).isEmpty();
     }
 
@@ -844,6 +939,10 @@ class BookingDecisionPostgresTests {
         assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
                 .hasSize(2)
                 .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isFalse());
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE aggregate_id = ? AND payload ->> 'action' = 'REMOVE'
+                """, Integer.class, reservation.getId())).isEqualTo(2);
         assertThat(reservations.existsRoomOccupancyConflict(roomId, START, END.plusSeconds(300))).isFalse();
         assertThat(reservationOccurrences.existsRoomOccupancyConflict(roomId, START, END.plusSeconds(300)))
                 .isFalse();
@@ -937,6 +1036,9 @@ class BookingDecisionPostgresTests {
         assertThat(cancellations.findFirstByReservation_IdOrderByCancelledAtDesc(reservation.getId())).isEmpty();
         assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
                 .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isTrue());
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox WHERE aggregate_id = ?
+                """, Integer.class, reservation.getId())).isZero();
     }
 
     @Test
@@ -993,6 +1095,11 @@ class BookingDecisionPostgresTests {
         var replay = cancellationService.cancelRequest(request.getId(), cancellationRequest);
 
         assertThat(first.cancellationId()).isEqualTo(replay.cancellationId());
+        assertThatThrownBy(() -> cancellationService.cancelRequest(request.getId(),
+                new CancellationRequest(CancellationReason.USER, "Different reason", null)))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).code())
+                        .isEqualTo("CANCELLATION_REPLAY_CONFLICT"));
         assertThat(bookingRequests.findById(request.getId())).isPresent()
                 .get().extracting(BookingRequest::getStatus).isEqualTo(BookingRequestStatus.CANCELLED);
         assertThat(cancellations.findFirstByBookingRequest_IdOrderByCancelledAtDesc(request.getId())).isPresent();
@@ -1210,6 +1317,38 @@ class BookingDecisionPostgresTests {
             return "decided";
         } catch (DomainException exception) {
             return exception.code();
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    private BookingExtensionResponse requestExtension(UUID reservationId, CreateBookingExtensionRequest request,
+                                                       CountDownLatch ready, CountDownLatch start) throws Exception {
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+        httpRequest.addHeader("Authorization", TOKEN);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(httpRequest));
+        ready.countDown();
+        try {
+            if (!start.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Concurrent extension retry test did not start");
+            }
+            return extensionService.request(reservationId, request, "concurrent-extension-key");
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    private String createBookingRequest(CreateBookingRequest request, CountDownLatch ready,
+                                        CountDownLatch start) throws Exception {
+        MockHttpServletRequest httpRequest = new MockHttpServletRequest();
+        httpRequest.addHeader("Authorization", TOKEN);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(httpRequest));
+        ready.countDown();
+        try {
+            if (!start.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Concurrent booking request retry test did not start");
+            }
+            return bookingRequestService.create(request, "concurrent-request-key").requestReference();
         } finally {
             RequestContextHolder.resetRequestAttributes();
         }

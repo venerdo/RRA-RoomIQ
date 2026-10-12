@@ -102,6 +102,22 @@ class BookingAuthorizationInterceptorTests {
     }
 
     @Test
+    void internalOccupancyRouteRequiresIdentityAuthentication() {
+        String path = "/api/v1/internal/availability/occupancy";
+        String bearerToken = "Bearer occupancy-test-token";
+        MockHttpServletRequest request = request("POST", path, bearerToken);
+        request.setServletPath(path);
+        UUID actorId = UUID.randomUUID();
+        when(authorizationClient.authenticate(anyString())).thenReturn(actorId);
+
+        assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
+
+        assertThat(request.getAttribute(BookingAuthorizationInterceptor.ACTOR_USER_ID_ATTRIBUTE))
+                .isEqualTo(actorId);
+        verify(authorizationClient).authenticate(bearerToken);
+    }
+
+    @Test
     void optionsRequestsAreAuthenticatedAndDelegatedToo() {
         MockHttpServletRequest request = request("OPTIONS", "/api/v1/bookings", "Bearer test-token");
         when(authorizationClient.authenticate("Bearer test-token")).thenReturn(UUID.randomUUID());
@@ -119,6 +135,12 @@ class BookingAuthorizationInterceptorTests {
                     .isInstanceOf(DomainException.class)
                     .hasMessage("Authentication is required");
         }
+        MockHttpServletRequest occupancyRequest =
+                request("POST", "/api/v1/internal/availability/occupancy", null);
+        occupancyRequest.setServletPath("/api/v1/internal/availability/occupancy");
+        assertThatThrownBy(() -> interceptor.preHandle(occupancyRequest, response, new Object()))
+                .isInstanceOf(DomainException.class)
+                .hasMessage("Authentication is required");
         verifyNoInteractions(authorizationClient);
     }
 

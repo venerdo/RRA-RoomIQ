@@ -17,6 +17,15 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
 server:
   port: ${BOOKING_SERVICE_PORT:8085}
 roomiq:
@@ -28,6 +37,14 @@ roomiq:
     url: ${ROOM_SERVICE_URL:http://localhost:8083}
   scheduling:
     url: ${SCHEDULING_SERVICE_URL:http://localhost:8084}
+  booking:
+    share-token:
+      key-ring: ${BOOKING_SHARE_TOKEN_KEY_RING:}
+      active-key-version: ${BOOKING_SHARE_TOKEN_ACTIVE_KEY_VERSION:v1}
+    event-relay:
+      enabled: ${BOOKING_EVENT_RELAY_ENABLED:true}
+      fixed-delay-ms: ${BOOKING_EVENT_RELAY_FIXED_DELAY_MS:1000}
+      confirm-timeout-ms: ${BOOKING_EVENT_RELAY_CONFIRM_TIMEOUT_MS:3000}
 management:
   endpoints:
     web:

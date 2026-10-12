@@ -58,6 +58,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -67,6 +68,7 @@ import static org.mockito.Mockito.when;
 @Import(MeetingShareLinkPostgresTests.TestClients.class)
 class MeetingShareLinkPostgresTests {
     private static final String TOKEN = "Bearer test-caller-token";
+    private static final String TOKEN_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     private static final Instant START = Instant.parse("2030-04-10T10:00:00Z");
     private static final Instant END = Instant.parse("2030-04-10T11:00:00Z");
 
@@ -78,6 +80,9 @@ class MeetingShareLinkPostgresTests {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("roomiq.booking.event-relay.enabled", () -> "false");
+        registry.add("roomiq.booking.share-token.key-ring", () -> "test=" + TOKEN_KEY);
+        registry.add("roomiq.booking.share-token.active-key-version", () -> "test");
     }
 
     @Autowired
@@ -123,9 +128,10 @@ class MeetingShareLinkPostgresTests {
                 .getOfficeBuildingId(), TOKEN)).thenReturn("Africa/Kigali");
         Instant expiry = Instant.now().plusSeconds(3600);
 
-        var created = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(expiry));
+        var created = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(expiry), "share-create-1");
 
-        assertThat(created.token()).matches("[A-Za-z0-9_-]{43}");
+        assertThat(created.token()).matches("v1\\.test\\.[A-Za-z0-9_-]{43}");
+        assertThat(created.replayed()).isFalse();
         assertThat(created.shareLinkId()).isNotNull();
         assertThat(created.expiresAt()).isEqualTo(expiry.truncatedTo(ChronoUnit.MICROS));
         MeetingShareLink persisted = links.findById(created.shareLinkId()).orElseThrow();
@@ -158,6 +164,83 @@ class MeetingShareLinkPostgresTests {
     }
 
     @Test
+    void equivalentShareLinkRetryReturnsSameTokenAndKeyReuseWithDifferentPayloadConflicts() throws SQLException {
+        Meeting meeting = approvedMeeting();
+        UUID actorId = UUID.randomUUID();
+        authorizeManagement(actorId);
+        when(ownerServices.authoritativeBuildingTimezone(any(UUID.class), eq(TOKEN)))
+                .thenReturn("Africa/Kigali");
+        Instant expiry = Instant.now().plusSeconds(3600);
+
+        var first = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(expiry), "same-share-key");
+        var replay = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(expiry), "same-share-key");
+
+        assertThat(first.replayed()).isFalse();
+        assertThat(replay.replayed()).isTrue();
+        assertThat(replay.shareLinkId()).isEqualTo(first.shareLinkId());
+        assertThat(replay.token()).isEqualTo(first.token());
+        assertThat(links.count()).isEqualTo(1);
+        verify(ownerServices, times(1)).authoritativeBuildingTimezone(any(UUID.class), eq(TOKEN));
+
+        assertThatThrownBy(() -> service.create(meeting.getId(),
+                new CreateMeetingShareLinkRequest(expiry.plusSeconds(1)), "same-share-key"))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> {
+                    DomainException exception = (DomainException) error;
+                    assertThat(exception.status()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.code()).isEqualTo("IDEMPOTENCY_KEY_CONFLICT");
+                });
+        assertThat(links.count()).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentSameKeyShareLinkCreatesReturnOnePersistedLinkAndReplay() throws Exception {
+        Meeting meeting = approvedMeeting();
+        UUID actorId = UUID.randomUUID();
+        authorizeManagement(actorId);
+        when(ownerServices.authoritativeBuildingTimezone(any(UUID.class), eq(TOKEN)))
+                .thenReturn("Africa/Kigali");
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            var first = executor.submit(() -> concurrentCreate(meeting.getId(), ready, start));
+            var second = executor.submit(() -> concurrentCreate(meeting.getId(), ready, start));
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            var firstResult = first.get(20, TimeUnit.SECONDS);
+            var secondResult = second.get(20, TimeUnit.SECONDS);
+
+            assertThat(firstResult.shareLinkId()).isEqualTo(secondResult.shareLinkId());
+            assertThat(firstResult.token()).isEqualTo(secondResult.token());
+            assertThat(List.of(firstResult.replayed(), secondResult.replayed()))
+                    .containsExactlyInAnyOrder(false, true);
+        }
+        assertThat(links.count()).isEqualTo(1);
+    }
+
+    @Test
+    void replayFailsClosedWhenPersistedHashCannotBeReproduced() throws SQLException {
+        Meeting meeting = approvedMeeting();
+        authorizeManagement(UUID.randomUUID());
+        when(ownerServices.authoritativeBuildingTimezone(any(UUID.class), eq(TOKEN)))
+                .thenReturn("Africa/Kigali");
+        var created = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(null), "hash-mismatch");
+        jdbcTemplate.update("UPDATE meeting_share_link SET token_hash = ? WHERE id = ?",
+                "0".repeat(64), created.shareLinkId());
+
+        assertThatThrownBy(() -> service.create(meeting.getId(),
+                new CreateMeetingShareLinkRequest(null), "hash-mismatch"))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> {
+                    DomainException exception = (DomainException) error;
+                    assertThat(exception.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(exception.code()).isEqualTo("SHARE_LINK_TOKEN_REPLAY_UNAVAILABLE");
+                });
+        assertThat(links.count()).isEqualTo(1);
+    }
+
+    @Test
     void refusesUnapprovedMeetingAndAuthorizationDenialBeforeTimezoneLookupOrWrite() throws Exception {
         BookingRequest request = bookingRequests.saveAndFlush(bookingRequest(
                 UUID.randomUUID(), BookingRequestStatus.PENDING_APPROVAL));
@@ -166,7 +249,8 @@ class MeetingShareLinkPostgresTests {
                 "Trusted organizer", null, null, MeetingVisibility.PRIVATE, Instant.now()));
         authorizeManagement(UUID.randomUUID());
 
-        assertThatThrownBy(() -> service.create(meeting.getId(), new CreateMeetingShareLinkRequest(null)))
+        assertThatThrownBy(() -> service.create(meeting.getId(),
+                new CreateMeetingShareLinkRequest(null), "ineligible"))
                 .isInstanceOf(DomainException.class)
                 .satisfies(error -> {
                     DomainException exception = (DomainException) error;
@@ -181,7 +265,8 @@ class MeetingShareLinkPostgresTests {
         when(authorization.authorizeMeeting(any(MeetingAuthorizationRequest.class)))
                 .thenThrow(new DomainException(HttpStatus.FORBIDDEN, "MEETING_ACCESS_DENIED", "Denied"));
 
-        assertThatThrownBy(() -> service.create(approvedMeeting.getId(), new CreateMeetingShareLinkRequest(null)))
+        assertThatThrownBy(() -> service.create(approvedMeeting.getId(),
+                new CreateMeetingShareLinkRequest(null), "denied"))
                 .isInstanceOf(DomainException.class)
                 .satisfies(error -> assertThat(((DomainException) error).code()).isEqualTo("MEETING_ACCESS_DENIED"));
         assertThat(links.count()).isZero();
@@ -195,7 +280,7 @@ class MeetingShareLinkPostgresTests {
         authorizeManagement(actorId);
         when(ownerServices.authoritativeBuildingTimezone(any(UUID.class), eq(TOKEN)))
                 .thenReturn("Africa/Kigali");
-        var created = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(null));
+        var created = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(null), "revoke-test");
 
         assertPublicNotFound("not-a-token");
 
@@ -206,11 +291,15 @@ class MeetingShareLinkPostgresTests {
         var repeatedRevoke = service.revoke(created.shareLinkId());
         assertThat(repeatedRevoke.revokedAt()).isEqualTo(revoked.revokedAt());
         assertThat(links.findById(created.shareLinkId()).orElseThrow().getViewCount()).isZero();
+        var replayed = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(null), "revoke-test");
+        assertThat(replayed.replayed()).isTrue();
+        assertThat(replayed.token()).isEqualTo(created.token());
+        assertPublicNotFound(replayed.token());
 
         Meeting secondMeeting = approvedMeeting();
-        String expiredToken = "A".repeat(43);
+        String expiredToken = "v1.test." + "A".repeat(43);
         MeetingShareLink expired = links.saveAndFlush(new MeetingShareLink(secondMeeting, hashToken(expiredToken),
-                "Africa/Kigali", actorId, Instant.now().minusSeconds(1), null, 0));
+                "Africa/Kigali", actorId, null, Instant.now().minusSeconds(1), null, 0));
         assertPublicNotFound(expiredToken);
         assertThat(expired.getViewCount()).isZero();
     }
@@ -221,7 +310,7 @@ class MeetingShareLinkPostgresTests {
         authorizeManagement(UUID.randomUUID());
         when(ownerServices.authoritativeBuildingTimezone(any(UUID.class), eq(TOKEN)))
                 .thenReturn("Africa/Kigali");
-        var created = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(null));
+        var created = service.create(meeting.getId(), new CreateMeetingShareLinkRequest(null), "concurrent-create");
 
         try (var executor = Executors.newFixedThreadPool(2)) {
             CountDownLatch ready = new CountDownLatch(2);
@@ -243,6 +332,22 @@ class MeetingShareLinkPostgresTests {
             throw new IllegalStateException("Concurrent share-link test did not start");
         }
         return service.readPublicCard(token);
+    }
+
+    private rw.rra.roomiq.booking.domain.dto.MeetingShareLinkCreatedResponse concurrentCreate(
+            UUID meetingId, CountDownLatch ready, CountDownLatch start) throws InterruptedException {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", TOKEN);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        ready.countDown();
+        try {
+            if (!start.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Concurrent share-link create test did not start");
+            }
+            return service.create(meetingId, new CreateMeetingShareLinkRequest(null), "concurrent-same-key");
+        } finally {
+            RequestContextHolder.resetRequestAttributes();
+        }
     }
 
     private void assertPublicNotFound(String token) {

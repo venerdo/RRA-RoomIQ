@@ -43,6 +43,8 @@ import rw.rra.roomiq.booking.domain.repository.MeetingRepository;
 import rw.rra.roomiq.booking.domain.repository.MeetingShareLinkRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
+import rw.rra.roomiq.booking.domain.service.BookingOccupancyService;
+import rw.rra.roomiq.booking.domain.dto.BookingOccupancyRequest;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -68,6 +70,7 @@ class BookingServiceApplicationTests {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("roomiq.booking.event-relay.enabled", () -> "false");
     }
 
     @Autowired
@@ -113,6 +116,9 @@ class BookingServiceApplicationTests {
     @Autowired
     private CancellationRepository cancellationRepository;
 
+    @Autowired
+    private BookingOccupancyService bookingOccupancyService;
+
     @Test
     void contextLoads() {
     }
@@ -142,6 +148,7 @@ class BookingServiceApplicationTests {
                 "/api/v1/meetings/{meetingId}/participants/{participantId}",
                 "/api/v1/meetings/{meetingId}/share-links",
                 "/api/v1/meeting-share-links/{shareLinkId}/revoke",
+                "/api/v1/internal/availability/occupancy",
                 "/api/v1/public/meetings/{token}");
     }
 
@@ -152,7 +159,7 @@ class BookingServiceApplicationTests {
                 Integer.class)).isEqualTo(1);
         assertThat(tableNames()).contains("booking_request", "approval_decision", "reservation", "meeting",
                 "meeting_participant", "meeting_share_link", "booking_extension", "cancellation",
-                "reservation_occurrence")
+                "reservation_occurrence", "booking_event_outbox")
                 .doesNotContain("room", "app_user", "office_building", "recurrence_rule");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '2' AND success = TRUE",
@@ -162,6 +169,12 @@ class BookingServiceApplicationTests {
                 Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '5' AND success = TRUE",
+                Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '6' AND success = TRUE",
+                Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '7' AND success = TRUE",
                 Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT COUNT(*) FROM pg_constraint
@@ -210,6 +223,7 @@ class BookingServiceApplicationTests {
         assertThat(importedForeignKeyColumns("cancellation"))
                 .containsExactlyInAnyOrder("booking_request_id", "reservation_id");
         assertThat(importedForeignKeyColumns("reservation_occurrence")).containsExactly("reservation_id");
+        assertThat(importedForeignKeyColumns("booking_event_outbox")).isEmpty();
     }
 
     @Test
@@ -219,7 +233,7 @@ class BookingServiceApplicationTests {
                 .extracting(entityType -> entityType.getJavaType().getSimpleName())
                 .containsExactlyInAnyOrder("BookingRequest", "ApprovalDecision", "Reservation", "Meeting",
                         "MeetingParticipant", "MeetingShareLink", "BookingExtension", "Cancellation",
-                        "ReservationOccurrence");
+                        "ReservationOccurrence", "BookingEventOutboxEntry");
 
         Instant start = Instant.parse("2026-11-07T10:00:00Z");
         Instant end = Instant.parse("2026-11-07T11:00:00Z");
@@ -255,7 +269,7 @@ class BookingServiceApplicationTests {
                 meeting, UUID.randomUUID(), null, "Participant", ParticipantRole.REQUIRED, InviteStatus.INVITED));
         MeetingShareLink shareLink = meetingShareLinkRepository.saveAndFlush(new MeetingShareLink(
                 meeting, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-                "Africa/Kigali", requesterId, end, null, 0));
+                "Africa/Kigali", requesterId, null, end, null, 0));
         BookingExtension extension = bookingExtensionRepository.saveAndFlush(new BookingExtension(
                 reservation, requesterId, end, end.plusSeconds(1800), null, BookingExtensionStatus.PENDING,
                 null, null, "extend-" + UUID.randomUUID(), start.minusSeconds(600), null));
@@ -300,6 +314,52 @@ class BookingServiceApplicationTests {
 
         assertThatThrownBy(() -> insertReservation(secondRequestId, roomId))
                 .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void occupancySnapshotIncludesBufferedIntervalsAndEveryRequestedRoom() {
+        UUID occupiedRoomId = UUID.randomUUID();
+        UUID emptyRoomId = UUID.randomUUID();
+        UUID requestId = insertBookingRequest();
+        insertReservation(requestId, occupiedRoomId);
+        jdbcTemplate.update("""
+                INSERT INTO reservation_occurrence
+                    (id, reservation_id, room_id, start_at, end_at, occupied_period, occupancy_active)
+                SELECT ?, id, ?, TIMESTAMPTZ '2026-11-07 10:00:00Z',
+                       TIMESTAMPTZ '2026-11-07 11:00:00Z',
+                       tstzrange(TIMESTAMPTZ '2026-11-07 10:00:00Z',
+                                 TIMESTAMPTZ '2026-11-07 11:05:00Z', '[)'), TRUE
+                FROM reservation WHERE booking_request_id = ?
+                """, UUID.randomUUID(), occupiedRoomId, requestId);
+
+        var snapshot = bookingOccupancyService.snapshot(new BookingOccupancyRequest(
+                java.util.List.of(occupiedRoomId, emptyRoomId),
+                Instant.parse("2026-11-07T10:30:00Z"),
+                Instant.parse("2026-11-07T11:10:00Z"),
+                "v1"));
+
+        assertThat(snapshot.snapshotAt()).isNotNull();
+        assertThat(snapshot.rooms()).extracting("roomId").containsExactly(occupiedRoomId, emptyRoomId);
+        assertThat(snapshot.rooms().getFirst().intervals()).containsExactly(
+                new rw.rra.roomiq.booking.domain.dto.BookingOccupancySnapshotResponse.OccupiedInterval(
+                        Instant.parse("2026-11-07T10:00:00Z"), Instant.parse("2026-11-07T11:05:00Z")));
+        assertThat(snapshot.rooms().get(1).intervals()).isEmpty();
+
+        var adjacentSnapshot = bookingOccupancyService.snapshot(new BookingOccupancyRequest(
+                java.util.List.of(occupiedRoomId),
+                Instant.parse("2026-11-07T11:05:00Z"),
+                Instant.parse("2026-11-07T12:00:00Z"),
+                "v1"));
+        assertThat(adjacentSnapshot.rooms().getFirst().intervals()).isEmpty();
+
+        jdbcTemplate.update("UPDATE reservation_occurrence SET occupancy_active = FALSE WHERE room_id = ?",
+                occupiedRoomId);
+        var releasedSnapshot = bookingOccupancyService.snapshot(new BookingOccupancyRequest(
+                java.util.List.of(occupiedRoomId),
+                Instant.parse("2026-11-07T10:30:00Z"),
+                Instant.parse("2026-11-07T11:10:00Z"),
+                "v1"));
+        assertThat(releasedSnapshot.rooms().getFirst().intervals()).isEmpty();
     }
 
     @Test

@@ -5,12 +5,15 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "meeting_share_link")
+@Table(name = "meeting_share_link", uniqueConstraints =
+        @UniqueConstraint(name = "uq_meeting_share_link_creator_idempotency",
+                columnNames = {"created_by_user_id", "idempotency_key"}))
 public class MeetingShareLink extends BookingEntity {
     @ManyToOne(optional = false)
     @JoinColumn(name = "meeting_id", nullable = false)
@@ -25,6 +28,9 @@ public class MeetingShareLink extends BookingEntity {
     @Column(name = "created_by_user_id", nullable = false)
     private UUID createdByUserId;
 
+    @Column(name = "idempotency_key", length = 128)
+    private String idempotencyKey;
+
     @Column(name = "expires_at")
     private Instant expiresAt;
 
@@ -38,11 +44,12 @@ public class MeetingShareLink extends BookingEntity {
     }
 
     public MeetingShareLink(Meeting meeting, String tokenHash, String timezone, UUID createdByUserId,
-                            Instant expiresAt, Instant revokedAt, int viewCount) {
+                            String idempotencyKey, Instant expiresAt, Instant revokedAt, int viewCount) {
         this.meeting = meeting;
         this.tokenHash = tokenHash;
         this.timezone = timezone;
         this.createdByUserId = createdByUserId;
+        this.idempotencyKey = idempotencyKey;
         this.expiresAt = expiresAt;
         this.revokedAt = revokedAt;
         this.viewCount = viewCount;
@@ -52,6 +59,7 @@ public class MeetingShareLink extends BookingEntity {
     public String getTokenHash() { return tokenHash; }
     public String getTimezone() { return timezone; }
     public UUID getCreatedByUserId() { return createdByUserId; }
+    public String getIdempotencyKey() { return idempotencyKey; }
     public Instant getExpiresAt() { return expiresAt; }
     public Instant getRevokedAt() { return revokedAt; }
     public int getViewCount() { return viewCount; }

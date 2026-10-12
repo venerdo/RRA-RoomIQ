@@ -56,6 +56,8 @@ public class BookingExtensionService {
     private final BookingExtensionRepository extensions;
     private final BookingAuthorizationClient authorizationClient;
     private final BookingOwnerServicesClient ownerServicesClient;
+    private final PostgresIdempotencyLock idempotencyLock;
+    private final BookingOccupancyOutboxService occupancyOutbox;
     private final Clock clock;
     @PersistenceContext
     private EntityManager entityManager;
@@ -65,8 +67,11 @@ public class BookingExtensionService {
                                    ReservationOccurrenceRepository occurrences,
                                    BookingExtensionRepository extensions,
                                    BookingAuthorizationClient authorizationClient,
-                                   BookingOwnerServicesClient ownerServicesClient) {
-        this(reservations, occurrences, extensions, authorizationClient, ownerServicesClient, Clock.systemUTC());
+                                   BookingOwnerServicesClient ownerServicesClient,
+                                   PostgresIdempotencyLock idempotencyLock,
+                                   BookingOccupancyOutboxService occupancyOutbox) {
+        this(reservations, occurrences, extensions, authorizationClient, ownerServicesClient,
+                idempotencyLock, occupancyOutbox, Clock.systemUTC());
     }
 
     BookingExtensionService(ReservationRepository reservations,
@@ -74,12 +79,15 @@ public class BookingExtensionService {
                             BookingExtensionRepository extensions,
                             BookingAuthorizationClient authorizationClient,
                             BookingOwnerServicesClient ownerServicesClient,
+                            PostgresIdempotencyLock idempotencyLock, BookingOccupancyOutboxService occupancyOutbox,
                             Clock clock) {
         this.reservations = reservations;
         this.occurrences = occurrences;
         this.extensions = extensions;
         this.authorizationClient = authorizationClient;
         this.ownerServicesClient = ownerServicesClient;
+        this.idempotencyLock = idempotencyLock;
+        this.occupancyOutbox = occupancyOutbox;
         this.clock = clock;
     }
 
@@ -100,6 +108,7 @@ public class BookingExtensionService {
         }
 
         if (idempotencyKey != null) {
+            idempotencyLock.acquire("booking-extension:create", idempotencyKey);
             var existing = extensions.findByIdempotencyKey(idempotencyKey);
             if (existing.isPresent()) {
                 BookingExtension previous = existing.get();
@@ -206,6 +215,7 @@ public class BookingExtensionService {
         try {
             reservations.saveAndFlush(reservation);
             occurrences.saveAndFlush(reservationOccurrences.getFirst());
+            occupancyOutbox.recordUpserts(reservation, reservationOccurrences, decidedAt);
             return response(extensions.saveAndFlush(extension));
         } catch (DataAccessException exception) {
             if (hasConstraint(exception, RESERVATION_OVERLAP_CONSTRAINT)

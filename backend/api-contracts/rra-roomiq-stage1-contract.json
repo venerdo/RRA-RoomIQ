@@ -1,9 +1,9 @@
 {
   "apiVersion": "1.0.0",
   "project": "RRA RoomIQ",
-  "stage": "Stage 6",
-  "status": "stage-6-in-progress",
-  "stageStatusReason": "Stages 3, 4, and 5 are accepted and the Stage 6 checklist is approved. S6-01 through S6-13 are complete and verified; S6-14 remains proposed and not started. Booking exposes protected request, decision, direct-booking, reservation lifecycle, meeting, participant, cancellation, extension, share-link management, and internal occupancy operations; none is routed through the API Gateway. The only deliberately unauthenticated Booking route is GET /api/v1/public/meetings/{token}, which returns an explicit public-card allowlist. Identity, Organization, Room, and Scheduling checks use caller-token propagation and fail closed before writes. Share-link creation requires current Identity MANAGE authorization and approved/confirmed Booking state, obtains the IANA timezone from Organization, and requires Idempotency-Key. Request/direct-booking, extension, and share-link creation serialize retries with PostgreSQL transaction-scoped advisory locks; same-key payload conflicts are explicit. Share-link tokens are deterministically reproduced from the authenticated creator, key, and versioned HMAC key ring, while only token hashes are persisted. Cancellation replay requires the same authorized actor and equivalent payload. The user approved nullable MEETING_SHARE_LINK.idempotency_key VARCHAR(128) and UNIQUE(created_by_user_id, idempotency_key); Flyway V6 preserves null for legacy rows. S6-13 persists versioned occupancy events in the explicitly approved BOOKING_EVENT_OUTBOX schema in the same transaction as occupancy changes; an at-least-once relay publishes after commit and consumers deduplicate by eventId. Focused S6-13 outbox tests passed 20/20, Booking 138/138, Identity 53/53, common-web 6/6, and the full 11-module backend reactor 311/311, with zero failures, errors, or skips. The user-approved nullable reservation.completed_at integrity is enforced by Flyway V3. Recurring booking conflicts remain all-or-nothing.",
+  "stage": "Stage 7",
+  "status": "stage-7-checklist-approved",
+  "stageStatusReason": "Stage 6 was accepted by the user on 2026-10-12 after S6-01 through S6-14 passed verification. The user approved the Stage 7 requirement checklist on 2026-10-12; requirement implementation has not started. Notification Service is currently a scaffold with no notification domain APIs or persistence. The approved checklist is grounded in the SRS and approved NOTIFICATION, NOTIFICATION_TEMPLATE, DELIVERY_ATTEMPT, and USER_NOTIFICATION_PREFERENCE ERD entities. No Stage 7 behavior, routes, schema, or service configuration has been implemented. Existing Booking protected API and outbox behavior remains as captured under stage6Progress. Preference defaults, reminder policy, provider configuration, retry policy, template-management authorization, and event contracts must be resolved before the affected implementation work. No API Gateway route is proposed for Stage 7; Gateway exposure remains Stage 11.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -1019,11 +1019,66 @@
       },
       "documentation": "Backend roadmap, service README, API contract, and architecture/readme references are synchronized through S5-07 and follow-up S5-06 authorization hardening. Stage 5 Scheduling business routes require bearer/Identity checks but are not API Gateway/public routes. Deployment ingress must restrict direct business API and OpenAPI access to a private/trusted network.",
       "requirementsAndErd": "No requirements, SRS, ERD, or migration change was required.",
-      "stageAcceptance": "Stage 5 was accepted by the user on 2026-10-09. Booking's concurrent reservation exclusion/locking tests remain a Stage 6 acceptance requirement."
+      "stageAcceptance": "Stage 6 was accepted by the user on 2026-10-12 after S6-01 through S6-14 were complete and the PostgreSQL Booking, Identity/common-web, and full backend regression gates passed."
     }
   },
+  "stage7Progress": {
+      "status": "checklist-approved",
+      "implementationStarted": false,
+      "checklist": "Documentation.md#stage-7-requirement-checklist-approved",
+      "requirements": [
+        "S7-01",
+        "S7-02",
+        "S7-03",
+        "S7-04",
+        "S7-05",
+        "S7-06",
+        "S7-07",
+        "S7-08"
+      ],
+      "requirementStatuses": {
+        "S7-01": "proposed",
+        "S7-02": "proposed",
+        "S7-03": "proposed",
+        "S7-04": "proposed",
+        "S7-05": "proposed",
+        "S7-06": "proposed",
+        "S7-07": "proposed",
+        "S7-08": "proposed"
+      },
+      "approvedErdEntities": [
+        "NOTIFICATION",
+        "NOTIFICATION_TEMPLATE",
+        "DELIVERY_ATTEMPT",
+        "USER_NOTIFICATION_PREFERENCE"
+      ],
+      "srsEventFamilies": [
+        "BookingRequested",
+        "BookingApproved",
+        "BookingRejected",
+        "BookingCancelled",
+        "ExtensionRequested",
+        "ExtensionDecided",
+        "RoomStatusChanged",
+        "MeetingCompleted",
+        "MeetingReleased",
+        "Reminder",
+        "AutomaticReleaseOrNoShow"
+      ],
+      "openDecisionsBeforeImplementation": [
+        "Channel preference defaults and any non-disableable notification classes",
+        "Reminder schedule, recipient rules, and timezone behavior",
+        "Approved SMTP/email provider and sender configuration",
+        "Retry limit, backoff, dead-letter inspection, and redrive policy",
+        "Template management authorization",
+        "Versioned event payload contracts and trustworthy recipient/contact resolution for event families not yet produced",
+        "RRA-approved numeric throughput and latency SLOs"
+      ],
+      "currentImplementation": "Notification Service contains only its Spring Boot entry point, basic runtime configuration, and application-context smoke test; no business APIs or persistence are implemented.",
+      "erdPolicy": "No ERD edits or migrations are authorized by this checklist. Any required schema addition/change must be proposed exactly and receive explicit user approval first."
+  },
   "stage6Progress": {
-    "status": "in-progress",
+    "status": "complete",
     "implementationStarted": true,
     "checklist": "Documentation.md#stage-6-requirement-checklist-approved",
     "requirements": [
@@ -1056,7 +1111,7 @@
       "S6-11": "complete",
       "S6-12": "complete",
       "S6-13": "complete",
-      "S6-14": "not-started"
+      "S6-14": "complete"
     },
     "persistenceTables": [
       "booking_request",
@@ -1139,6 +1194,35 @@
           "public route bearer-guard exception is path/method scoped",
           "bounded per-client request rate control"
         ]
+      },
+      "S6-14RegressionGate": {
+        "bookingCommand": "mvn -f backend/pom.xml -pl booking-service -am test",
+        "bookingAndCommonWeb": {
+          "bookingPassed": 138,
+          "commonWebPassed": 6,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "identityCommand": "mvn -f backend/pom.xml -pl identity-service,common-web test",
+        "identityAndCommonWeb": {
+          "identityPassed": 53,
+          "commonWebPassed": 6,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "fullReactorCommand": "mvn -f backend/pom.xml test",
+        "fullBackendReactor": {
+          "modules": 11,
+          "passed": 311,
+          "failed": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "overlapConcurrencyEvidence": "PostgreSQL BookingDecisionPostgresTests exercised exclusion-constraint overlap rejection and a database deadlock race; the tests passed and normalized the rejected writes without partial reservation state.",
+        "documentationAndContracts": "Stage 6 roadmap/checklist, API contract status and verification, Booking and Scheduling READMEs, backend docs README and architecture notes are synchronized. The JSON contract parses and git diff --check passes.",
+        "erdOrProductionChange": "None; this requirement is a regression/documentation acceptance gate."
       },
       "fullS6-11Regressions": {
         "bookingModule": {

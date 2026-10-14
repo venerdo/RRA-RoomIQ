@@ -73,4 +73,22 @@ class ReservationLifecycleControllerTests {
 
         verify(service).complete(reservationId);
     }
+
+    @Test
+    void explicitReleaseHasNoClientSuppliedActorOrTimestamp() throws Exception {
+        UUID reservationId = UUID.randomUUID();
+        when(service.release(reservationId)).thenReturn(new ReservationLifecycleResponse(
+                reservationId, ReservationStatus.RELEASED, null, null));
+
+        mockMvc.perform(post("/api/v1/reservations/{reservationId}/release", reservationId)
+                        .contentType("application/json")
+                        .content("""
+                                {"actorUserId":"%s","releasedAt":"2000-01-01T00:00:00Z"}
+                                """.formatted(UUID.randomUUID())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.reservationId").value(reservationId.toString()))
+                .andExpect(jsonPath("$.data.status").value("RELEASED"));
+
+        verify(service).release(reservationId);
+    }
 }

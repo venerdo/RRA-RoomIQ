@@ -36,6 +36,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -58,6 +59,7 @@ public class BookingExtensionService {
     private final BookingOwnerServicesClient ownerServicesClient;
     private final PostgresIdempotencyLock idempotencyLock;
     private final BookingOccupancyOutboxService occupancyOutbox;
+    private final BookingDomainEventOutboxService domainEvents;
     private final Clock clock;
     @PersistenceContext
     private EntityManager entityManager;
@@ -69,9 +71,10 @@ public class BookingExtensionService {
                                    BookingAuthorizationClient authorizationClient,
                                    BookingOwnerServicesClient ownerServicesClient,
                                    PostgresIdempotencyLock idempotencyLock,
-                                   BookingOccupancyOutboxService occupancyOutbox) {
+                                   BookingOccupancyOutboxService occupancyOutbox,
+                                   BookingDomainEventOutboxService domainEvents) {
         this(reservations, occurrences, extensions, authorizationClient, ownerServicesClient,
-                idempotencyLock, occupancyOutbox, Clock.systemUTC());
+                idempotencyLock, occupancyOutbox, domainEvents, Clock.systemUTC());
     }
 
     BookingExtensionService(ReservationRepository reservations,
@@ -80,7 +83,7 @@ public class BookingExtensionService {
                             BookingAuthorizationClient authorizationClient,
                             BookingOwnerServicesClient ownerServicesClient,
                             PostgresIdempotencyLock idempotencyLock, BookingOccupancyOutboxService occupancyOutbox,
-                            Clock clock) {
+                            BookingDomainEventOutboxService domainEvents, Clock clock) {
         this.reservations = reservations;
         this.occurrences = occurrences;
         this.extensions = extensions;
@@ -88,6 +91,7 @@ public class BookingExtensionService {
         this.ownerServicesClient = ownerServicesClient;
         this.idempotencyLock = idempotencyLock;
         this.occupancyOutbox = occupancyOutbox;
+        this.domainEvents = domainEvents;
         this.clock = clock;
     }
 
@@ -136,7 +140,13 @@ public class BookingExtensionService {
         BookingExtension extension = new BookingExtension(reservation, actor, reservation.getEndAt(),
                 requestedEnd, null, PENDING, null, null, idempotencyKey, clock.instant(), null);
         try {
-            return response(extensions.saveAndFlush(extension));
+            BookingExtension saved = extensions.saveAndFlush(extension);
+            domainEvents.record("ExtensionRequested", "BOOKING_EXTENSION", saved.getId(), 0,
+                    saved.getRequestedAt(), List.of(saved.getRequestedByUserId()), Map.of(
+                            "requesterUserId", saved.getRequestedByUserId().toString(),
+                            "reservationId", reservation.getId().toString(),
+                            "requestedEndAt", saved.getRequestedEndAt().toString()));
+            return response(saved);
         } catch (DataIntegrityViolationException exception) {
             if (hasConstraint(exception, EXTENSION_KEY_CONSTRAINT)) {
                 throw idempotencyConflict();
@@ -172,7 +182,9 @@ public class BookingExtensionService {
                     trimToNull(request.comment()), timestamp(), null)) {
                 throw extensionStateConflict();
             }
-            return response(extensions.saveAndFlush(extension));
+            BookingExtension saved = extensions.saveAndFlush(extension);
+            recordDecisionEvent(saved, actor);
+            return response(saved);
         }
         if (request.decision() != APPROVED) {
             throw new DomainException(HttpStatus.BAD_REQUEST, "BOOKING_EXTENSION_DECISION_INVALID",
@@ -216,7 +228,9 @@ public class BookingExtensionService {
             reservations.saveAndFlush(reservation);
             occurrences.saveAndFlush(reservationOccurrences.getFirst());
             occupancyOutbox.recordUpserts(reservation, reservationOccurrences, decidedAt);
-            return response(extensions.saveAndFlush(extension));
+            BookingExtension saved = extensions.saveAndFlush(extension);
+            recordDecisionEvent(saved, actor);
+            return response(saved);
         } catch (DataAccessException exception) {
             if (hasConstraint(exception, RESERVATION_OVERLAP_CONSTRAINT)
                     || hasConstraint(exception, OCCURRENCE_OVERLAP_CONSTRAINT)
@@ -245,7 +259,18 @@ public class BookingExtensionService {
         if (!extension.decide(CANCELLED, actor, null, timestamp(), null)) {
             throw extensionStateConflict();
         }
-        return response(extensions.saveAndFlush(extension));
+        BookingExtension saved = extensions.saveAndFlush(extension);
+        recordDecisionEvent(saved, actor);
+        return response(saved);
+    }
+
+    private void recordDecisionEvent(BookingExtension extension, UUID actor) {
+        domainEvents.record("ExtensionDecided", "BOOKING_EXTENSION", extension.getId(), 0,
+                extension.getDecidedAt(), List.of(extension.getRequestedByUserId()), Map.of(
+                        "requesterUserId", extension.getRequestedByUserId().toString(),
+                        "decidedByUserId", actor.toString(),
+                        "reservationId", extension.getReservation().getId().toString(),
+                        "decision", extension.getStatus().name()));
     }
 
     private UUID authorizeRequester(Reservation reservation) {

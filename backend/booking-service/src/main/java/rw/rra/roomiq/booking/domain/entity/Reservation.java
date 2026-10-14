@@ -121,6 +121,14 @@ public class Reservation extends BookingEntity {
         return true;
     }
 
+    public boolean release() {
+        if (status != ReservationStatus.CONFIRMED && status != ReservationStatus.IN_PROGRESS) {
+            return false;
+        }
+        status = ReservationStatus.RELEASED;
+        return true;
+    }
+
     public boolean extendTo(Instant newEndAt, int newReleaseBufferMinutes, PGobject newOccupiedPeriod) {
         if ((status != ReservationStatus.CONFIRMED && status != ReservationStatus.IN_PROGRESS)
                 || newEndAt == null || !newEndAt.isAfter(endAt) || newReleaseBufferMinutes < 0

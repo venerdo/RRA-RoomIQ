@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -38,6 +39,7 @@ public class BookingCancellationService {
     private final BookingAuthorizationClient authorizationClient;
     private final BookingOwnerServicesClient ownerServicesClient;
     private final BookingOccupancyOutboxService occupancyOutbox;
+    private final BookingDomainEventOutboxService domainEvents;
     private final Clock clock;
 
     @Autowired
@@ -47,9 +49,10 @@ public class BookingCancellationService {
                                      CancellationRepository cancellations,
                                      BookingAuthorizationClient authorizationClient,
                                      BookingOwnerServicesClient ownerServicesClient,
-                                     BookingOccupancyOutboxService occupancyOutbox) {
+                                     BookingOccupancyOutboxService occupancyOutbox,
+                                     BookingDomainEventOutboxService domainEvents) {
         this(bookingRequests, reservations, occurrences, cancellations, authorizationClient,
-                ownerServicesClient, occupancyOutbox, Clock.systemUTC());
+                ownerServicesClient, occupancyOutbox, domainEvents, Clock.systemUTC());
     }
 
     BookingCancellationService(BookingRequestRepository bookingRequests,
@@ -58,7 +61,8 @@ public class BookingCancellationService {
                                CancellationRepository cancellations,
                                BookingAuthorizationClient authorizationClient,
                                BookingOwnerServicesClient ownerServicesClient,
-                               BookingOccupancyOutboxService occupancyOutbox, Clock clock) {
+                               BookingOccupancyOutboxService occupancyOutbox,
+                               BookingDomainEventOutboxService domainEvents, Clock clock) {
         this.bookingRequests = bookingRequests;
         this.reservations = reservations;
         this.occurrences = occurrences;
@@ -66,6 +70,7 @@ public class BookingCancellationService {
         this.authorizationClient = authorizationClient;
         this.ownerServicesClient = ownerServicesClient;
         this.occupancyOutbox = occupancyOutbox;
+        this.domainEvents = domainEvents;
         this.clock = clock;
     }
 
@@ -103,6 +108,11 @@ public class BookingCancellationService {
                 authorization.actorUserId(), request.reasonCode(), request.reason().trim(), null,
                 false, null, now));
         bookingRequests.saveAndFlush(bookingRequest);
+        domainEvents.record("BookingCancelled", "CANCELLATION", cancellation.getId(), 0, now,
+                List.of(bookingRequest.getRequestedByUserId()), Map.of(
+                        "cancelledByUserId", authorization.actorUserId().toString(),
+                        "reasonCode", request.reasonCode().name(),
+                        "bookingRequestId", bookingRequest.getId().toString()));
         return response(cancellation);
     }
 
@@ -157,6 +167,11 @@ public class BookingCancellationService {
         Cancellation cancellation = cancellations.saveAndFlush(new Cancellation(reservation, bookingRequest,
                 authorization.actorUserId(), request.reasonCode(), request.reason().trim(), deadline,
                 overdue, overdue ? overrideReason : null, now));
+        domainEvents.record("BookingCancelled", "CANCELLATION", cancellation.getId(), 0, now,
+                List.of(bookingRequest.getRequestedByUserId()), Map.of(
+                        "cancelledByUserId", authorization.actorUserId().toString(),
+                        "reasonCode", request.reasonCode().name(),
+                        "reservationId", reservation.getId().toString()));
         return response(cancellation);
     }
 

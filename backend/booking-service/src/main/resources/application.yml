@@ -20,8 +20,8 @@ spring:
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:guest}
-    password: ${RABBITMQ_PASSWORD:guest}
+    username: ${BOOKING_RABBITMQ_USERNAME:${RABBITMQ_USERNAME:guest}}
+    password: ${BOOKING_RABBITMQ_PASSWORD:${RABBITMQ_PASSWORD:guest}}
     publisher-confirm-type: correlated
     publisher-returns: true
     template:

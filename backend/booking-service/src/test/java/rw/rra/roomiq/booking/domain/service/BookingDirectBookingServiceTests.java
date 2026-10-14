@@ -53,6 +53,7 @@ class BookingDirectBookingServiceTests {
     private final BookingOwnerServicesClient ownerServicesClient = mock(BookingOwnerServicesClient.class);
     private final BookingConfirmationService confirmationService = mock(BookingConfirmationService.class);
     private final PostgresIdempotencyLock idempotencyLock = mock(PostgresIdempotencyLock.class);
+    private final BookingDomainEventOutboxService domainEvents = mock(BookingDomainEventOutboxService.class);
 
     private final UUID actorId = UUID.randomUUID();
     private final UUID buildingId = UUID.randomUUID();
@@ -67,7 +68,7 @@ class BookingDirectBookingServiceTests {
     void setUp() {
         service = new BookingDirectBookingService(requests, reservations, occurrences, meetings,
                 authorizationClient, ownerServicesClient, confirmationService, idempotencyLock,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                domainEvents, Clock.fixed(NOW, ZoneOffset.UTC));
         MockHttpServletRequest servletRequest = new MockHttpServletRequest();
         servletRequest.addHeader("Authorization", TOKEN);
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(servletRequest));
@@ -93,6 +94,8 @@ class BookingDirectBookingServiceTests {
         assertThat(saved.getStatus()).isEqualTo(BookingRequestStatus.PENDING_APPROVAL);
         assertThat(saved.getRequestType()).isEqualTo(BookingRequestType.ADMIN_DIRECT_BOOKING);
         assertThat(saved.getRequestedByUserId()).isEqualTo(actorId);
+        verify(domainEvents).record(eq("BookingRequested"), eq("BOOKING_REQUEST"), any(),
+                anyLong(), eq(NOW), anyList(), anyMap());
         verify(confirmationService, never()).confirm(any(), any(), any());
     }
 

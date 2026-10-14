@@ -29,6 +29,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.List;
+import java.util.Map;
 
 import static rw.rra.roomiq.booking.domain.enums.BookingRequestStatus.PENDING_APPROVAL;
 import static rw.rra.roomiq.booking.integration.BookingAuthorizationRequest.Action.AUTHENTICATE;
@@ -45,6 +47,7 @@ public class BookingDirectBookingService {
     private final BookingOwnerServicesClient ownerServicesClient;
     private final BookingConfirmationService confirmationService;
     private final PostgresIdempotencyLock idempotencyLock;
+    private final BookingDomainEventOutboxService domainEvents;
     private final Clock clock;
 
     @Autowired
@@ -55,9 +58,10 @@ public class BookingDirectBookingService {
                                        BookingAuthorizationClient authorizationClient,
                                        BookingOwnerServicesClient ownerServicesClient,
                                        BookingConfirmationService confirmationService,
-                                       PostgresIdempotencyLock idempotencyLock) {
+                                       PostgresIdempotencyLock idempotencyLock,
+                                       BookingDomainEventOutboxService domainEvents) {
         this(requests, reservations, occurrences, meetings, authorizationClient, ownerServicesClient,
-                confirmationService, idempotencyLock, Clock.systemUTC());
+                confirmationService, idempotencyLock, domainEvents, Clock.systemUTC());
     }
 
     BookingDirectBookingService(BookingRequestRepository requests,
@@ -68,6 +72,7 @@ public class BookingDirectBookingService {
                                 BookingOwnerServicesClient ownerServicesClient,
                                 BookingConfirmationService confirmationService,
                                 PostgresIdempotencyLock idempotencyLock,
+                                BookingDomainEventOutboxService domainEvents,
                                 Clock clock) {
         this.requests = requests;
         this.reservations = reservations;
@@ -77,6 +82,7 @@ public class BookingDirectBookingService {
         this.ownerServicesClient = ownerServicesClient;
         this.confirmationService = confirmationService;
         this.idempotencyLock = idempotencyLock;
+        this.domainEvents = domainEvents;
         this.clock = clock;
     }
 
@@ -146,6 +152,12 @@ public class BookingDirectBookingService {
             }
             throw exception;
         }
+
+        domainEvents.record("BookingRequested", "BOOKING_REQUEST", bookingRequest.getId(),
+                bookingRequest.getVersion(), now, List.of(bookingRequest.getRequestedByUserId()), Map.of(
+                        "requesterUserId", bookingRequest.getRequestedByUserId().toString(),
+                        "roomId", bookingRequest.getRoomId().toString(),
+                        "requestReference", bookingRequest.getRequestReference()));
 
         if (references.approvalRequired()) {
             return response(bookingRequest, null, null, references.occurrences().size());

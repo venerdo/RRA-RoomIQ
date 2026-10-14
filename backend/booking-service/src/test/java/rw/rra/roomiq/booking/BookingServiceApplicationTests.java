@@ -139,6 +139,7 @@ class BookingServiceApplicationTests {
                 "/api/v1/bookings/direct",
                 "/api/v1/reservations/{reservationId}/check-in",
                 "/api/v1/reservations/{reservationId}/complete",
+                "/api/v1/reservations/{reservationId}/release",
                 "/api/v1/reservations/{reservationId}/cancel",
                 "/api/v1/reservations/{reservationId}/extensions",
                 "/api/v1/booking-extensions/{extensionId}/decision",
@@ -149,6 +150,7 @@ class BookingServiceApplicationTests {
                 "/api/v1/meetings/{meetingId}/share-links",
                 "/api/v1/meeting-share-links/{shareLinkId}/revoke",
                 "/api/v1/internal/availability/occupancy",
+                "/api/v1/internal/notifications/room-event-recipients",
                 "/api/v1/public/meetings/{token}");
     }
 

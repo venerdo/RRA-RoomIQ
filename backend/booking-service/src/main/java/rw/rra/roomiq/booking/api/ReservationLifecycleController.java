@@ -41,4 +41,12 @@ public class ReservationLifecycleController {
     public ApiResponse<ReservationLifecycleResponse> complete(@PathVariable UUID reservationId) {
         return ApiResponse.success("Reservation completed", service.complete(reservationId));
     }
+
+    @PostMapping("/{reservationId}/release")
+    @ResponseStatus(HttpStatus.OK)
+    @Operation(summary = "Release an active reservation",
+            description = "Requires current Identity authorization for the persisted organizer/building scope. Only confirmed or in-progress reservations can be released. The terminal state, occupancy release, and MeetingReleased event are committed atomically.")
+    public ApiResponse<ReservationLifecycleResponse> release(@PathVariable UUID reservationId) {
+        return ApiResponse.success("Reservation released", service.release(reservationId));
+    }
 }

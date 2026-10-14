@@ -177,7 +177,49 @@ class BookingEventOutboxRelayTests {
                 .containsExactly(entry.getEventId().toString(), entry.getEventId().toString());
     }
 
+    @Test
+    void routesBusinessEventsToTheirVersionedNotificationRoutingKeys() {
+        UUID eventId = UUID.randomUUID();
+        BookingEventOutboxEntry entry = entry(eventId, "BookingRequested");
+        when(outboxRepository.claimDue(NOW)).thenReturn(List.of(entry));
+        doAnswer(invocation -> {
+            CorrelationData correlation = invocation.getArgument(3);
+            correlation.getFuture().complete(new CorrelationData.Confirm(true, "ack"));
+            return null;
+        }).when(rabbitTemplate).send(eq(BookingEventMessagingConfiguration.EVENTS_EXCHANGE),
+                eq("booking.requested"), any(Message.class), any(CorrelationData.class));
+
+        relay.publishPendingEvents();
+
+        verify(rabbitTemplate).send(eq(BookingEventMessagingConfiguration.EVENTS_EXCHANGE),
+                eq("booking.requested"), any(Message.class), any(CorrelationData.class));
+        assertThat(entry.getPublishedAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    void routesReminderEventsToNotificationConsumers() {
+        UUID eventId = UUID.randomUUID();
+        BookingEventOutboxEntry entry = entry(eventId, "Reminder");
+        when(outboxRepository.claimDue(NOW)).thenReturn(List.of(entry));
+        doAnswer(invocation -> {
+            CorrelationData correlation = invocation.getArgument(3);
+            correlation.getFuture().complete(new CorrelationData.Confirm(true, "ack"));
+            return null;
+        }).when(rabbitTemplate).send(eq(BookingEventMessagingConfiguration.EVENTS_EXCHANGE),
+                eq("notification.reminder"), any(Message.class), any(CorrelationData.class));
+
+        relay.publishPendingEvents();
+
+        verify(rabbitTemplate).send(eq(BookingEventMessagingConfiguration.EVENTS_EXCHANGE),
+                eq("notification.reminder"), any(Message.class), any(CorrelationData.class));
+        assertThat(entry.getPublishedAt()).isEqualTo(NOW);
+    }
+
     private static BookingEventOutboxEntry entry(UUID eventId) {
+        return entry(eventId, BookingOccupancyOutboxService.EVENT_TYPE);
+    }
+
+    private static BookingEventOutboxEntry entry(UUID eventId, String eventType) {
         PGobject payload = new PGobject();
         payload.setType("jsonb");
         try {
@@ -185,7 +227,7 @@ class BookingEventOutboxRelayTests {
         } catch (java.sql.SQLException exception) {
             throw new IllegalStateException(exception);
         }
-        return new BookingEventOutboxEntry(eventId, BookingOccupancyOutboxService.EVENT_TYPE, 1,
+        return new BookingEventOutboxEntry(eventId, eventType, 1,
                 BookingOccupancyOutboxService.AGGREGATE_TYPE, UUID.randomUUID(), 1, payload, NOW, NOW);
     }
 }

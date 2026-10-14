@@ -38,6 +38,43 @@ public interface ReservationOccurrenceRepository extends JpaRepository<Reservati
 
     List<ReservationOccurrence> findAllByReservation_IdOrderByStartAt(UUID reservationId);
 
+    @Query(value = """
+            SELECT recipients.recipient_user_id
+            FROM (
+                SELECT reservation.organizer_user_id AS recipient_user_id
+                FROM reservation_occurrence occurrence
+                JOIN reservation ON reservation.id = occurrence.reservation_id
+                JOIN booking_request request ON request.id = reservation.booking_request_id
+                WHERE occurrence.room_id = :roomId
+                  AND request.office_building_id = :officeBuildingId
+                  AND occurrence.occupancy_active = TRUE
+                  AND reservation.status IN ('CONFIRMED', 'IN_PROGRESS')
+                  AND occurrence.occupied_period
+                      && tstzrange(:startsAt, CAST(:endsAt AS timestamptz), '[)')
+                UNION
+                SELECT participant.user_id AS recipient_user_id
+                FROM reservation_occurrence occurrence
+                JOIN reservation ON reservation.id = occurrence.reservation_id
+                JOIN booking_request request ON request.id = reservation.booking_request_id
+                JOIN meeting ON meeting.reservation_id = reservation.id
+                JOIN meeting_participant participant ON participant.meeting_id = meeting.id
+                WHERE occurrence.room_id = :roomId
+                  AND request.office_building_id = :officeBuildingId
+                  AND occurrence.occupancy_active = TRUE
+                  AND reservation.status IN ('CONFIRMED', 'IN_PROGRESS')
+                  AND participant.user_id IS NOT NULL
+                  AND occurrence.occupied_period
+                      && tstzrange(:startsAt, CAST(:endsAt AS timestamptz), '[)')
+            ) recipients
+            WHERE recipients.recipient_user_id IS NOT NULL
+            ORDER BY recipients.recipient_user_id
+            """, nativeQuery = true)
+    List<UUID> findActiveInternalRecipientsForRoomEvent(
+            @Param("roomId") UUID roomId,
+            @Param("officeBuildingId") UUID officeBuildingId,
+            @Param("startsAt") Instant startsAt,
+            @Param("endsAt") Instant endsAt);
+
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @org.springframework.data.jpa.repository.Query("""
             select occurrence from ReservationOccurrence occurrence

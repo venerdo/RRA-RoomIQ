@@ -68,6 +68,20 @@ class BookingAuthorizationClientTests {
     }
 
     @Test
+    void roomEventRecipientAuthorizationRequiresIdentityRoomManagementScope() {
+        UUID actorId = UUID.randomUUID();
+        UUID buildingId = UUID.randomUUID();
+        server.expect(requestTo(URL + "/api/v1/internal/authorization/room-management"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Authorization", CALLER_TOKEN))
+                .andExpect(jsonPath("$.officeBuildingId").value(buildingId.toString()))
+                .andRespond(withSuccess("{\"actorUserId\":\"" + actorId + "\"}", MediaType.APPLICATION_JSON));
+
+        assertThat(client.authorizeRoomManagement(buildingId)).isEqualTo(actorId);
+        server.verify();
+    }
+
+    @Test
     void approvalAuthorizationReturnsIdentityDerivedRequesterProfile() {
         UUID actorId = UUID.randomUUID();
         UUID requesterId = UUID.randomUUID();

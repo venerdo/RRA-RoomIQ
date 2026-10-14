@@ -6,31 +6,60 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import rw.rra.roomiq.booking.domain.dto.ReservationLifecycleResponse;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
+import rw.rra.roomiq.booking.domain.entity.ReservationOccurrence;
+import rw.rra.roomiq.booking.domain.repository.MeetingParticipantRepository;
+import rw.rra.roomiq.booking.domain.repository.MeetingRepository;
 import rw.rra.roomiq.booking.domain.repository.ReservationRepository;
+import rw.rra.roomiq.booking.domain.repository.ReservationOccurrenceRepository;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
 import rw.rra.roomiq.common.web.DomainException;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 @Service
 public class ReservationLifecycleService {
     private final ReservationRepository reservations;
+    private final ReservationOccurrenceRepository occurrences;
     private final BookingAuthorizationClient authorizationClient;
+    private final MeetingRepository meetings;
+    private final MeetingParticipantRepository participants;
+    private final BookingOccupancyOutboxService occupancyOutbox;
+    private final BookingDomainEventOutboxService domainEvents;
     private final Clock clock;
 
     @Autowired
     public ReservationLifecycleService(ReservationRepository reservations,
-                                       BookingAuthorizationClient authorizationClient) {
-        this(reservations, authorizationClient, Clock.systemUTC());
+                                       ReservationOccurrenceRepository occurrences,
+                                       BookingAuthorizationClient authorizationClient,
+                                       MeetingRepository meetings,
+                                       MeetingParticipantRepository participants,
+                                       BookingOccupancyOutboxService occupancyOutbox,
+                                       BookingDomainEventOutboxService domainEvents) {
+        this(reservations, occurrences, authorizationClient, meetings, participants, occupancyOutbox,
+                domainEvents, Clock.systemUTC());
     }
 
     ReservationLifecycleService(ReservationRepository reservations,
-                                BookingAuthorizationClient authorizationClient, Clock clock) {
+                                ReservationOccurrenceRepository occurrences,
+                                BookingAuthorizationClient authorizationClient,
+                                MeetingRepository meetings,
+                                MeetingParticipantRepository participants,
+                                BookingOccupancyOutboxService occupancyOutbox,
+                                BookingDomainEventOutboxService domainEvents,
+                                Clock clock) {
         this.reservations = reservations;
+        this.occurrences = occurrences;
         this.authorizationClient = authorizationClient;
+        this.meetings = meetings;
+        this.participants = participants;
+        this.occupancyOutbox = occupancyOutbox;
+        this.domainEvents = domainEvents;
         this.clock = clock;
     }
 
@@ -51,7 +80,52 @@ public class ReservationLifecycleService {
         if (!reservation.complete(serverTimestamp())) {
             throw invalidTransition();
         }
-        return response(reservations.saveAndFlush(reservation));
+        Reservation completed = reservations.saveAndFlush(reservation);
+        var meeting = meetings.findByReservation_Id(completed.getId()).orElseThrow(() ->
+                new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BOOKING_MEETING_INCONSISTENT",
+                        "A completed reservation has no persisted meeting"));
+        domainEvents.record("MeetingCompleted", "MEETING", meeting.getId(), 0,
+                completed.getCompletedAt(), List.of(completed.getOrganizerUserId()), Map.of(
+                        "meetingId", meeting.getId().toString(),
+                        "completedAt", completed.getCompletedAt().toString(),
+                        "reservationId", completed.getId().toString()));
+        return response(completed);
+    }
+
+    @Transactional
+    public ReservationLifecycleResponse release(UUID reservationId) {
+        Reservation reservation = lockReservation(reservationId);
+        UUID actor = authorize(reservation);
+        var meeting = meetings.findByReservation_Id(reservation.getId()).orElseThrow(() ->
+                new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BOOKING_MEETING_INCONSISTENT",
+                        "A released reservation has no persisted meeting"));
+        List<ReservationOccurrence> reservationOccurrences =
+                occurrences.findAllByReservationIdForUpdate(reservation.getId());
+        if (reservationOccurrences.isEmpty()) {
+            throw new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "BOOKING_OCCUPANCY_INCONSISTENT",
+                    "A released reservation has no persisted occupancy occurrences");
+        }
+        Instant releasedAt = serverTimestamp();
+        if (!reservation.release()) {
+            throw invalidTransition();
+        }
+        Reservation released = reservations.saveAndFlush(reservation);
+        occupancyOutbox.recordRemovals(released, reservationOccurrences, releasedAt);
+        reservationOccurrences.forEach(ReservationOccurrence::releaseOccupancy);
+        occurrences.saveAllAndFlush(reservationOccurrences);
+        List<UUID> recipients = Stream.concat(Stream.of(released.getOrganizerUserId()),
+                        participants.findAllByMeeting_IdOrderById(meeting.getId()).stream()
+                                .map(participant -> participant.getUserId()))
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        domainEvents.record("MeetingReleased", "MEETING", meeting.getId(), released.getVersion(),
+                releasedAt, recipients, Map.of(
+                        "meetingId", meeting.getId().toString(),
+                        "releasedAt", releasedAt.toString(),
+                        "reservationId", released.getId().toString(),
+                        "releasedByUserId", actor.toString()));
+        return response(released);
     }
 
     private Reservation lockReservation(UUID reservationId) {
@@ -64,7 +138,7 @@ public class ReservationLifecycleService {
                         "Reservation was not found"));
     }
 
-    private void authorize(Reservation reservation) {
+    private UUID authorize(Reservation reservation) {
         UUID actor = authorizationClient.authorizeReservationLifecycle(reservation.getOrganizerUserId(),
                 reservation.getBookingRequest().getDepartmentId(),
                 reservation.getBookingRequest().getOfficeBuildingId());
@@ -72,6 +146,7 @@ public class ReservationLifecycleService {
             throw new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "IDENTITY_AUTHORIZATION_UNAVAILABLE",
                     "Identity authorization is unavailable; the reservation operation cannot proceed");
         }
+        return actor;
     }
 
     private static ReservationLifecycleResponse response(Reservation reservation) {

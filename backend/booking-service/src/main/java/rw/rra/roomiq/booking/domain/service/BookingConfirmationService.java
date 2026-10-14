@@ -35,10 +35,12 @@ import rw.rra.roomiq.booking.integration.BookingOwnerServicesClient.ValidatedBoo
 import rw.rra.roomiq.common.web.DomainException;
 
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeSet;
 import java.util.UUID;
 
@@ -55,6 +57,7 @@ public class BookingConfirmationService {
     private final MeetingParticipantRepository participants;
     private final BookingOwnerServicesClient ownerServicesClient;
     private final BookingOccupancyOutboxService occupancyOutbox;
+    private final BookingDomainEventOutboxService domainEventOutbox;
 
     @Autowired
     public BookingConfirmationService(BookingRequestRepository bookingRequests,
@@ -63,7 +66,8 @@ public class BookingConfirmationService {
                                       MeetingRepository meetings,
                                       MeetingParticipantRepository participants,
                                       BookingOwnerServicesClient ownerServicesClient,
-                                      BookingOccupancyOutboxService occupancyOutbox) {
+                                      BookingOccupancyOutboxService occupancyOutbox,
+                                      BookingDomainEventOutboxService domainEventOutbox) {
         this.bookingRequests = bookingRequests;
         this.reservations = reservations;
         this.occurrences = occurrences;
@@ -71,6 +75,7 @@ public class BookingConfirmationService {
         this.participants = participants;
         this.ownerServicesClient = ownerServicesClient;
         this.occupancyOutbox = occupancyOutbox;
+        this.domainEventOutbox = domainEventOutbox;
     }
 
     @Transactional
@@ -150,7 +155,27 @@ public class BookingConfirmationService {
         meetings.saveAndFlush(meeting);
         participants.saveAndFlush(organizer);
         bookingRequests.saveAndFlush(bookingRequest);
+        recordMeetingReminders(meeting, reservation, reservationOccurrences,
+                bookingRequest.getRequestedByUserId(), references.timezone(), confirmedAt);
         return new ConfirmedBooking(reservation, meeting, reservationOccurrences.size());
+    }
+
+    private void recordMeetingReminders(Meeting meeting, Reservation reservation,
+                                        List<ReservationOccurrence> reservationOccurrences,
+                                        UUID organizerUserId, String timezone, Instant confirmedAt) {
+        for (ReservationOccurrence occurrence : reservationOccurrences) {
+            for (int offsetMinutes : List.of(15, 5)) {
+                Instant reminderAt = occurrence.getStartAt().minus(Duration.ofMinutes(offsetMinutes));
+                domainEventOutbox.record("Reminder", "MEETING", meeting.getId(), 1, confirmedAt,
+                        List.of(organizerUserId), Map.of(
+                                "meetingId", meeting.getId().toString(),
+                                "reservationId", reservation.getId().toString(),
+                                "occurrenceStartsAt", occurrence.getStartAt().toString(),
+                                "timezone", timezone,
+                                "reminderAt", reminderAt.toString(),
+                                "reminderOffsetMinutes", offsetMinutes));
+            }
+        }
     }
 
     private void checkExistingConflicts(UUID roomId, List<OccurrenceRange> ranges) {

@@ -3,7 +3,7 @@
   "project": "RRA RoomIQ",
   "stage": "Stage 7",
   "status": "stage-7-checklist-approved",
-  "stageStatusReason": "Stage 6 was accepted by the user on 2026-10-12 after S6-01 through S6-14 passed verification. The user approved the Stage 7 requirement checklist on 2026-10-12; requirement implementation has not started. Notification Service is currently a scaffold with no notification domain APIs or persistence. The approved checklist is grounded in the SRS and approved NOTIFICATION, NOTIFICATION_TEMPLATE, DELIVERY_ATTEMPT, and USER_NOTIFICATION_PREFERENCE ERD entities. No Stage 7 behavior, routes, schema, or service configuration has been implemented. Existing Booking protected API and outbox behavior remains as captured under stage6Progress. Preference defaults, reminder policy, provider configuration, retry policy, template-management authorization, and event contracts must be resolved before the affected implementation work. No API Gateway route is proposed for Stage 7; Gateway exposure remains Stage 11.",
+  "stageStatusReason": "Stage 6 was accepted by the user on 2026-10-12 after S6-01 through S6-14 passed verification. The user approved the Stage 7 checklist on 2026-10-12. S7-01 is complete: the Notification consumer, Booking/Room producers, and durable 15-/5-minute meeting reminders are implemented and pass focused and full-reactor verification. No Notification business API or Gateway route has been added. Event schema and supported consumer routing are recorded under stage7Progress.eventContract. Source identity is validated against the declared source service, event type, aggregate type, and routing key; because the body source field is not authentication, production RabbitMQ permissions must constrain each publisher credential to its owned routing keys. Production publisher ACL verification remains deployment work. Preferences, provider configuration, template-management authorization, and recipient policy expansion belong to their relevant later requirements.",
   "stage2Progress": {
     "S2-01": {
       "name": "Identity schema migration",
@@ -1024,7 +1024,7 @@
   },
   "stage7Progress": {
       "status": "checklist-approved",
-      "implementationStarted": false,
+      "implementationStarted": true,
       "checklist": "Documentation.md#stage-7-requirement-checklist-approved",
       "requirements": [
         "S7-01",
@@ -1037,7 +1037,7 @@
         "S7-08"
       ],
       "requirementStatuses": {
-        "S7-01": "proposed",
+        "S7-01": "complete",
         "S7-02": "proposed",
         "S7-03": "proposed",
         "S7-04": "proposed",
@@ -1067,15 +1067,222 @@
       ],
       "openDecisionsBeforeImplementation": [
         "Channel preference defaults and any non-disableable notification classes",
-        "Reminder schedule, recipient rules, and timezone behavior",
         "Approved SMTP/email provider and sender configuration",
         "Retry limit, backoff, dead-letter inspection, and redrive policy",
         "Template management authorization",
         "Versioned event payload contracts and trustworthy recipient/contact resolution for event families not yet produced",
         "RRA-approved numeric throughput and latency SLOs"
       ],
-      "currentImplementation": "Notification Service contains only its Spring Boot entry point, basic runtime configuration, and application-context smoke test; no business APIs or persistence are implemented.",
-      "erdPolicy": "No ERD edits or migrations are authorized by this checklist. Any required schema addition/change must be proposed exactly and receive explicit user approval first."
+      "currentImplementation": "Notification Service has a v1 RabbitMQ consumer with durable main/dead-letter queues, bounded retries, strict envelope/event validation, and transactional PostgreSQL event receipts plus in-app notification effects. Booking transactionally emits request, approval/rejection, cancellation, extension, meeting-completion, explicit reservation-release, and per-occurrence Reminder events through its existing outbox. Each confirmed occurrence schedules organizer reminders 15 and 5 minutes before its Scheduling-validated start, using the validated IANA timezone. Notification persists SCHEDULED reminder rows, uses a reservation-scoped advisory lock and durable terminal-event receipts before making due rows PENDING, and cancels future or unread reminders on cancellation/completion/release. Reminder replay is deduplicated by event receipt and the approved schedule uniqueness index. The protected POST /api/v1/reservations/{reservationId}/release operation permits only CONFIRMED or IN_PROGRESS to transition to RELEASED, deactivates every occurrence's occupancy, and emits MeetingReleased atomically; it uses the existing Identity lifecycle authorization and notifies the organizer plus internal meeting participants. Room transactionally emits status and maintenance events through the user-approved ROOM_EVENT_OUTBOX and resolves affected recipients through Booking's protected v1 lookup, authorized by Identity ROOM_MANAGE scope. Production publisher authorization remains an unverified deployment setting. No Notification API route or Gateway route has been added.",
+      "verification": {
+        "bookingFocused": "50 tests passed; zero failures, errors, or skips",
+        "roomFocused": "35 tests passed; zero failures, errors, or skips",
+        "notificationFocused": "24 tests passed; zero failures, errors, or skips",
+        "identityService": "53 tests passed; zero failures, errors, or skips",
+        "commonWeb": "6 tests passed; zero failures, errors, or skips",
+        "fullBackendReactor": "11 modules, 61 test suites, and 354 tests passed; zero failures, errors, or skips",
+        "acceptance": "S7-01 implementation and repository verification are complete. Production publisher credentials and routing-key ACLs remain an external deployment task and were not verified by these tests."
+      },
+      "eventContract": {
+        "exchange": "roomiq.events.v1",
+        "exchangeType": "direct",
+        "queue": "roomiq.notifications.events.v1",
+        "deadLetterExchange": "roomiq.notifications.events.dlx.v1",
+        "deadLetterQueue": "roomiq.notifications.events.dead-letter.v1",
+        "acknowledgement": "automatic after the proxied PostgreSQL transaction returns successfully",
+        "retry": {
+          "defaultAttempts": 3,
+          "initialInterval": "1s",
+          "multiplier": 2,
+          "maximumInterval": "5s",
+          "exhaustedOrPoisonBehavior": "reject without requeue and route to durable dead-letter queue"
+        },
+        "envelopeFields": {
+          "required": [
+            "eventId",
+            "sourceService",
+            "eventType",
+            "eventVersion",
+            "aggregateType",
+            "aggregateId",
+            "aggregateVersion",
+            "occurredAt",
+            "payload"
+          ],
+          "optional": [
+            "correlationId",
+            "causationId"
+          ],
+          "constraints": "eventId and aggregateId are UUIDs; eventVersion is exactly 1; aggregateVersion is a non-negative integer; occurredAt is an ISO-8601 instant; payload contains a unique recipientUserIds array of UUIDs and the event family's required facts; payload must not contain email or display-name overrides."
+        },
+        "events": [
+          {
+            "eventType": "BookingRequested",
+            "sourceService": "booking-service",
+            "routingKey": "booking.requested",
+            "aggregateType": "BOOKING_REQUEST",
+            "requiredPayloadFacts": [
+              "requesterUserId"
+            ]
+          },
+          {
+            "eventType": "BookingApproved",
+            "sourceService": "booking-service",
+            "routingKey": "booking.approved",
+            "aggregateType": "BOOKING_REQUEST",
+            "requiredPayloadFacts": [
+              "requesterUserId",
+              "decidedByUserId"
+            ]
+          },
+          {
+            "eventType": "BookingRejected",
+            "sourceService": "booking-service",
+            "routingKey": "booking.rejected",
+            "aggregateType": "BOOKING_REQUEST",
+            "requiredPayloadFacts": [
+              "requesterUserId",
+              "decidedByUserId"
+            ]
+          },
+          {
+            "eventType": "BookingCancelled",
+            "sourceService": "booking-service",
+            "routingKey": "booking.cancelled",
+            "aggregateType": "CANCELLATION",
+            "requiredPayloadFacts": [
+              "cancelledByUserId",
+              "reasonCode"
+            ]
+          },
+          {
+            "eventType": "ExtensionRequested",
+            "sourceService": "booking-service",
+            "routingKey": "booking.extension.requested",
+            "aggregateType": "BOOKING_EXTENSION",
+            "requiredPayloadFacts": [
+              "requesterUserId"
+            ]
+          },
+          {
+            "eventType": "ExtensionDecided",
+            "sourceService": "booking-service",
+            "routingKey": "booking.extension.decided",
+            "aggregateType": "BOOKING_EXTENSION",
+            "requiredPayloadFacts": [
+              "requesterUserId",
+              "decidedByUserId",
+              "decision"
+            ]
+          },
+          {
+            "eventType": "RoomStatusChanged",
+            "sourceService": "room-service",
+            "routingKey": "room.status.changed",
+            "aggregateType": "ROOM",
+            "requiredPayloadFacts": [
+              "roomId",
+              "status"
+            ]
+          },
+          {
+            "eventType": "RoomMaintenanceChanged",
+            "sourceService": "room-service",
+            "routingKey": "room.maintenance.changed",
+            "aggregateType": "ROOM",
+            "requiredPayloadFacts": [
+              "roomId",
+              "maintenancePeriodId",
+              "action",
+              "periodStart",
+              "periodEnd"
+            ],
+            "timestampFacts": [
+              "periodStart",
+              "periodEnd"
+            ]
+          },
+          {
+            "eventType": "MeetingCompleted",
+            "sourceService": "booking-service",
+            "routingKey": "booking.meeting.completed",
+            "aggregateType": "MEETING",
+            "requiredPayloadFacts": [
+              "meetingId",
+              "completedAt"
+            ]
+          },
+          {
+            "eventType": "MeetingReleased",
+            "sourceService": "booking-service",
+            "routingKey": "booking.meeting.released",
+            "aggregateType": "MEETING",
+            "requiredPayloadFacts": [
+              "meetingId",
+              "releasedAt",
+              "releasedByUserId",
+              "reservationId"
+            ],
+            "trigger": "Only the explicit protected POST /api/v1/reservations/{reservationId}/release operation emits this event. It atomically transitions an active reservation to RELEASED and deactivates its occurrence occupancy; completion and cancellation emit their own events."
+          },
+          {
+            "eventType": "Reminder",
+            "sourceService": "booking-service",
+            "routingKey": "notification.reminder",
+            "aggregateType": "MEETING",
+            "requiredPayloadFacts": [
+              "meetingId",
+              "reservationId",
+              "occurrenceStartsAt",
+              "timezone",
+              "reminderAt",
+              "reminderOffsetMinutes"
+            ],
+            "trigger": "Booking confirmation writes 15- and 5-minute reminder events for every validated reservation occurrence in the same source transaction as the reservation and meeting."
+          },
+          {
+            "eventType": "AutomaticReleaseOrNoShow",
+            "sourceService": "booking-service",
+            "routingKey": "booking.automatic-release-or-no-show",
+            "aggregateType": "RESERVATION",
+            "requiredPayloadFacts": [
+              "reservationId",
+              "reasonCode"
+            ]
+          }
+        ],
+        "sourceIdentity": "The consumer verifies the allowlisted sourceService/eventType pairing and the delivered routing key. Deployed RabbitMQ topic permissions must use distinct publisher credentials and permit each source to publish only its owned routing keys; body sourceService is not, by itself, authentication.",
+        "sourceCommitRule": "Business producers must publish from a transactional outbox after the owning transaction commits. Notification Service cannot independently prove a source database commit.",
+        "producerCoverage": "Booking emits BookingRequested, BookingApproved, BookingRejected, BookingCancelled, ExtensionRequested, ExtensionDecided, MeetingCompleted, MeetingReleased (only on explicit reservation release), and per-occurrence 15-/5-minute Reminder events via its transactionally written outbox. Reminder events carry trusted organizer recipient UUIDs, authoritative start/reminder instants, and the validated building IANA timezone. Room emits RoomStatusChanged and RoomMaintenanceChanged via ROOM_EVENT_OUTBOX. Production RabbitMQ publisher credentials and per-routing-key ACLs remain deployment requirements.",
+        "roomEventRecipientLookup": {
+          "method": "POST",
+          "path": "/api/v1/internal/notifications/room-event-recipients",
+          "contractVersion": "v1",
+          "authentication": "Bearer caller token plus Identity authorization for ROOM_MANAGE in officeBuildingId; protected Booking internal API and omitted from public OpenAPI.",
+          "request": {
+            "required": [
+              "roomId",
+              "officeBuildingId",
+              "startsAt",
+              "contractVersion"
+            ],
+            "optional": [
+              "endsAt"
+            ],
+            "timeRange": "When endsAt is supplied, match half-open occupied occurrence intervals overlapping [startsAt, endsAt). When endsAt is absent, match occurrences overlapping [startsAt, infinity), used for Room status changes."
+          },
+          "response": {
+            "fields": [
+              "contractVersion",
+              "roomId",
+              "recipientUserIds"
+            ],
+            "recipients": "Distinct organizers and internal participants for occupancy-active CONFIRMED or IN_PROGRESS reservations in the specified room/building. External participants and non-overlapping, cancelled, released, or completed reservations are excluded."
+          },
+          "failureBehavior": "Invalid ranges, authorization failures, and unavailable/malformed Booking responses fail explicitly; Room does not persist a Room event with a fabricated or silently empty audience."
+        }
+      },
+      "erdPolicy": "The user-approved durable event persistence consists of Booking's existing booking_event_outbox, NOTIFICATION_EVENT_RECEIPT, and ROOM_EVENT_OUTBOX as shown in the ERD and Room Flyway migration. No additional ERD or migration change is authorized without an exact proposal and explicit user approval."
   },
   "stage6Progress": {
     "status": "complete",
@@ -1442,7 +1649,7 @@
       }
     },
     "recurringSeriesPolicy": "All-or-nothing. Validate every occurrence; any conflict rejects the entire series with occurrence-specific conflict details and no partial persistence.",
-    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, POST /api/v1/booking-requests/{requestId}/cancel, POST /api/v1/bookings/direct, POST /api/v1/reservations/{reservationId}/check-in, POST /api/v1/reservations/{reservationId}/complete, POST /api/v1/reservations/{reservationId}/cancel, POST /api/v1/reservations/{reservationId}/extensions, POST /api/v1/booking-extensions/{extensionId}/decision, POST /api/v1/booking-extensions/{extensionId}/cancel, GET /api/v1/meetings/{meetingId}, GET/POST /api/v1/meetings/{meetingId}/participants, DELETE /api/v1/meetings/{meetingId}/participants/{participantId}, POST /api/v1/meetings/{meetingId}/share-links, POST /api/v1/meeting-share-links/{shareLinkId}/revoke, and internal POST /api/v1/internal/availability/occupancy (v1). All protected operations require bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The sole deliberately unauthenticated Booking data route is GET /api/v1/public/meetings/{token}, returning only title, startAt, endAt, timezone, and organizerDisplayName. The direct and recurring flows use the approved reservation_occurrence model.",
+    "endpointStatus": "Booking exposes protected POST/GET /api/v1/booking-requests, GET /api/v1/booking-requests/{id}, POST /api/v1/booking-requests/{id}/submit, POST /api/v1/booking-requests/{id}/decision, POST /api/v1/booking-requests/{requestId}/cancel, POST /api/v1/bookings/direct, POST /api/v1/reservations/{reservationId}/check-in, POST /api/v1/reservations/{reservationId}/complete, POST /api/v1/reservations/{reservationId}/release, POST /api/v1/reservations/{reservationId}/cancel, POST /api/v1/reservations/{reservationId}/extensions, POST /api/v1/booking-extensions/{extensionId}/decision, POST /api/v1/booking-extensions/{extensionId}/cancel, GET /api/v1/meetings/{meetingId}, GET/POST /api/v1/meetings/{meetingId}/participants, DELETE /api/v1/meetings/{meetingId}/participants/{participantId}, POST /api/v1/meetings/{meetingId}/share-links, POST /api/v1/meeting-share-links/{shareLinkId}/revoke, and internal POST /api/v1/internal/availability/occupancy (v1). All protected operations require bearer authentication and server-side Identity authorization; no Booking route is configured on the API Gateway. The sole deliberately unauthenticated Booking data route is GET /api/v1/public/meetings/{token}, returning only title, startAt, endAt, timezone, and organizerDisplayName. The direct and recurring flows use the approved reservation_occurrence model.",
     "shareLinkOperations": {
       "protectedManagement": [
         {
@@ -1610,6 +1817,13 @@
           "httpStatus": 200,
           "transition": "IN_PROGRESS → COMPLETED",
           "serverTimestamp": "completedAt"
+        },
+        {
+          "method": "POST",
+          "path": "/api/v1/reservations/{reservationId}/release",
+          "httpStatus": 200,
+          "transition": "CONFIRMED or IN_PROGRESS → RELEASED",
+          "serverTimestamp": "releasedAt (persisted in the transactionally written event outbox)"
         }
       ],
       "authenticationAndAuthorization": "Protected by the Booking bearer/Identity guard. Identity authorizes the current organizer only when current building and department match persisted reservation facts, a scoped lifecycle manager only in the assigned building, or a global IDENTITY_SYSTEM_ADMIN. Booking forwards the caller token and verifies the returned actor matches the persisted organizer.",
@@ -1623,7 +1837,7 @@
           "completedAt"
         ]
       },
-      "persistence": "Transitions lock the persisted reservation and commit status and server-generated UTC timestamp atomically. Only CONFIRMED → IN_PROGRESS → COMPLETED is permitted; CANCELLED and RELEASED are terminal. No automatic missed-check-in or overdue status transition/release is implemented.",
+      "persistence": "Transitions lock the persisted reservation. Check-in and completion commit their server-generated UTC timestamps atomically; explicit release commits the RELEASED state, occurrence occupancy deactivation, and MeetingReleased outbox event in one transaction. CONFIRMED or IN_PROGRESS may be explicitly released; COMPLETED, CANCELLED, and RELEASED cannot be reopened or explicitly released. No automatic missed-check-in or overdue release is implemented.",
       "schemaChange": "The user explicitly approved nullable reservation.completed_at TIMESTAMP WITH TIME ZONE, required iff status is COMPLETED. Booking Flyway V3 adds the column and check constraint; RRA_RoomIQ_ERD_v2.mmd reflects the field.",
       "occupancyIntegrity": "Existing buffered half-open occupied_period ranges and PostgreSQL GiST exclusion constraints on reservation and reservation_occurrence remain unchanged. Tests cover concurrent overlapping confirmations and extension-shaped range updates; no extension API is implemented by S6-07.",
       "stableErrors": [
@@ -1752,6 +1966,7 @@
       "POST /api/v1/bookings/direct",
       "POST /api/v1/reservations/{reservationId}/check-in",
       "POST /api/v1/reservations/{reservationId}/complete",
+      "POST /api/v1/reservations/{reservationId}/release",
       "POST /api/v1/booking-requests/{requestId}/cancel",
       "POST /api/v1/reservations/{reservationId}/cancel",
       "POST /api/v1/reservations/{reservationId}/extensions",
@@ -1765,7 +1980,7 @@
     "authenticationAndAuthorization": "Every route requires a bearer token and current Identity authorization. Create/submit/direct-create enforce current requester or direct-booking authority, department/building scope, and VIP privilege when applicable; list/get enforce requester or scoped reviewer access; decision, lifecycle, and cancellation operations revalidate the persisted resource owner and scope. Cancellation requires current owner, scoped administrator, or global system-administrator authority. Meeting operations load owner/scope facts from Booking records and use Identity's current active account and visibility decision. PRIVATE is readable by its active in-scope organizer or scoped Booking reviewer; INTERNAL additionally allows an active user assigned to the same building. PUBLIC does not bypass authorization or enable public-card access before S6-11. Participant management is limited to the organizer or scoped reviewer. Direct create resolves Identity authority before owner-data reads and rechecks VIP eligibility after Room identifies a VIP room.",
     "ownerServices": "Create, submit, direct-create, and confirmation forward the caller token to Identity, Organization, Room, and Scheduling APIs as applicable. Current building, department, room status/capacity/rules, calendar/timezone, stored recurrence, working windows, holidays, closures, every occurrence's Room maintenance periods, and Booking-owned occupancy are validated before writes; confirmation revalidates authoritative inputs. Booking checks maintenance response room identity and range shape. Missing, denied, inconsistent, malformed, or unavailable owner data fails closed.",
     "requestLifecycle": "Create stores a validated DRAFT. POST /api/v1/booking-requests/{id}/submit is requester-only, locks the draft, revalidates current owner and Identity policies, and transitions to PENDING_APPROVAL. POST /api/v1/booking-requests/{id}/decision permits an authorized scoped approver to approve or reject only a pending request; self-approval is denied. Approval revalidates current policy and occupancy and atomically creates a confirmed reservation, private meeting, and accepted requester organizer participant. Rejection creates no reservation or meeting. POST /api/v1/bookings/direct creates a normal pending request whenever the active Room Rule requires approval, regardless of whether the initiator is Admin, Super Admin, or eligible Secretary; no reservation or meeting exists until a different authorized reviewer approves. If the policy does not require approval, it confirms atomically. No policy-inferred or implicit auto-confirm occurs.",
-    "reservationLifecycle": "POST /api/v1/reservations/{reservationId}/check-in and /complete are bearer-protected and Identity-authorized. Identity validates the current organizer's persisted building/department scope, assigned building lifecycle-manager permission, or global system-admin authority. The routes accept no caller timestamp or actor; the server sets checkedInAt and completedAt. Row locking allows only CONFIRMED → IN_PROGRESS → COMPLETED; CANCELLED and RELEASED cannot reenter the lifecycle. Flyway V3 enforces completed_at iff status is COMPLETED. No automatic missed-check-in/overdue transition or release is implemented.",
+    "reservationLifecycle": "POST /api/v1/reservations/{reservationId}/check-in, /complete, and /release are bearer-protected and Identity-authorized. Identity validates the current organizer's persisted building/department scope, assigned building lifecycle-manager permission, or global system-admin authority. The routes accept no caller timestamp or actor. Row locking allows CONFIRMED → IN_PROGRESS → COMPLETED, or explicit CONFIRMED/IN_PROGRESS → RELEASED; RELEASED, CANCELLED, and COMPLETED are terminal. Explicit release deactivates all occurrence occupancy and writes a MeetingReleased event in the same transaction. Flyway V3 enforces completed_at iff status is COMPLETED. No automatic missed-check-in/overdue transition or release is implemented.",
     "cancellation": "POST /api/v1/booking-requests/{requestId}/cancel cancels an eligible request only when no reservation exists. POST /api/v1/reservations/{reservationId}/cancel cancels the entire recurring series. Both preserve request/reservation/history and serialize retries. Identity classifies the caller as OWNER, scoped ADMIN, or SYSTEM_ADMIN; request actors are never trusted. Room's current effective cancellation deadline is snapshotted as reservation start minus cancellationDeadlineMinutes. After deadline, only an authorized administrator with an explanation can override. Cancellation status changes, history insertion, and occurrence occupancy release are transactional; every recurring occurrence is released together.",
     "meetingAccess": {
       "routes": [

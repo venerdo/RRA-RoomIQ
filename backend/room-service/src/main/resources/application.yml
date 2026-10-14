@@ -19,6 +19,15 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: validate
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${ROOM_RABBITMQ_USERNAME:${RABBITMQ_USERNAME:guest}}
+    password: ${ROOM_RABBITMQ_PASSWORD:${RABBITMQ_PASSWORD:guest}}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
 server:
   port: ${ROOM_SERVICE_PORT:8083}
 organization:
@@ -27,6 +36,9 @@ organization:
 identity:
   service:
     url: ${IDENTITY_SERVICE_URL:http://localhost:8081}
+booking:
+  service:
+    url: ${BOOKING_SERVICE_URL:http://localhost:8085}
 cloudinary:
   cloud-name: ${CLOUDINARY_CLOUD_NAME:}
   api-key: ${CLOUDINARY_API_KEY:}
@@ -36,6 +48,11 @@ room:
   photos:
     max-file-size-bytes: ${ROOM_PHOTO_MAX_FILE_SIZE_BYTES:5242880}
     max-count: ${ROOM_PHOTO_MAX_COUNT:10}
+  events:
+    relay:
+      enabled: ${ROOM_EVENT_RELAY_ENABLED:true}
+      fixed-delay-ms: ${ROOM_EVENT_RELAY_FIXED_DELAY_MS:1000}
+      confirm-timeout-ms: ${ROOM_EVENT_RELAY_CONFIRM_TIMEOUT_MS:3000}
 management:
   endpoints:
     web:

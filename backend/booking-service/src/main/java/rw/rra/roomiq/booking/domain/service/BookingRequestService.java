@@ -30,6 +30,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import static rw.rra.roomiq.booking.integration.BookingAuthorizationRequest.Action.AUTHENTICATE;
@@ -46,25 +48,29 @@ public class BookingRequestService {
     private final BookingAuthorizationClient authorizationClient;
     private final BookingOwnerServicesClient ownerServicesClient;
     private final PostgresIdempotencyLock idempotencyLock;
+    private final BookingDomainEventOutboxService domainEvents;
     private final Clock clock;
 
     @Autowired
     public BookingRequestService(BookingRequestRepository repository,
                                  BookingAuthorizationClient authorizationClient,
                                  BookingOwnerServicesClient ownerServicesClient,
-                                 PostgresIdempotencyLock idempotencyLock) {
-        this(repository, authorizationClient, ownerServicesClient, idempotencyLock, Clock.systemUTC());
+                                 PostgresIdempotencyLock idempotencyLock,
+                                 BookingDomainEventOutboxService domainEvents) {
+        this(repository, authorizationClient, ownerServicesClient, idempotencyLock, domainEvents, Clock.systemUTC());
     }
 
     BookingRequestService(BookingRequestRepository repository,
                           BookingAuthorizationClient authorizationClient,
                           BookingOwnerServicesClient ownerServicesClient,
                           PostgresIdempotencyLock idempotencyLock,
+                          BookingDomainEventOutboxService domainEvents,
                           Clock clock) {
         this.repository = repository;
         this.authorizationClient = authorizationClient;
         this.ownerServicesClient = ownerServicesClient;
         this.idempotencyLock = idempotencyLock;
+        this.domainEvents = domainEvents;
         this.clock = clock;
     }
 
@@ -159,7 +165,13 @@ public class BookingRequestService {
             throw new DomainException(HttpStatus.CONFLICT, "BOOKING_REQUEST_STATE_CONFLICT",
                     "Only a draft booking request can be submitted");
         }
-        return BookingRequestResponse.from(repository.saveAndFlush(bookingRequest));
+        BookingRequest submitted = repository.saveAndFlush(bookingRequest);
+        domainEvents.record("BookingRequested", "BOOKING_REQUEST", submitted.getId(), submitted.getVersion(),
+                now, List.of(submitted.getRequestedByUserId()), Map.of(
+                        "requesterUserId", submitted.getRequestedByUserId().toString(),
+                        "roomId", submitted.getRoomId().toString(),
+                        "requestReference", submitted.getRequestReference()));
+        return BookingRequestResponse.from(submitted);
     }
 
     @Transactional(readOnly = true)

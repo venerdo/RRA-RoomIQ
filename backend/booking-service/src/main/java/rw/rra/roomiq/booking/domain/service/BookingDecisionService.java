@@ -21,6 +21,8 @@ import rw.rra.roomiq.common.web.DomainException;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType.APPROVED;
@@ -35,6 +37,7 @@ public class BookingDecisionService {
     private final ReservationRepository reservations;
     private final BookingAuthorizationClient authorizationClient;
     private final BookingConfirmationService confirmationService;
+    private final BookingDomainEventOutboxService domainEvents;
     private final Clock clock;
 
     @Autowired
@@ -42,9 +45,10 @@ public class BookingDecisionService {
                                   ApprovalDecisionRepository decisions,
                                   ReservationRepository reservations,
                                   BookingAuthorizationClient authorizationClient,
-                                  BookingConfirmationService confirmationService) {
+                                  BookingConfirmationService confirmationService,
+                                  BookingDomainEventOutboxService domainEvents) {
         this(bookingRequests, decisions, reservations, authorizationClient, confirmationService,
-                Clock.systemUTC());
+                domainEvents, Clock.systemUTC());
     }
 
     BookingDecisionService(BookingRequestRepository bookingRequests,
@@ -52,12 +56,14 @@ public class BookingDecisionService {
                            ReservationRepository reservations,
                            BookingAuthorizationClient authorizationClient,
                            BookingConfirmationService confirmationService,
+                           BookingDomainEventOutboxService domainEvents,
                            Clock clock) {
         this.bookingRequests = bookingRequests;
         this.decisions = decisions;
         this.reservations = reservations;
         this.authorizationClient = authorizationClient;
         this.confirmationService = confirmationService;
+        this.domainEvents = domainEvents;
         this.clock = clock;
     }
 
@@ -113,6 +119,10 @@ public class BookingDecisionService {
         try {
             decisions.saveAndFlush(decision);
             bookingRequests.saveAndFlush(bookingRequest);
+            domainEvents.record("BookingRejected", "BOOKING_REQUEST", bookingRequest.getId(),
+                    bookingRequest.getVersion(), decidedAt, List.of(bookingRequest.getRequestedByUserId()),
+                    Map.of("requesterUserId", bookingRequest.getRequestedByUserId().toString(),
+                            "decidedByUserId", actor.toString(), "decision", REJECTED.name()));
         } catch (DataIntegrityViolationException exception) {
             if (hasConstraint(exception, UNIQUE_DECISION_CONSTRAINT)) {
                 throw decisionConflict();
@@ -130,6 +140,11 @@ public class BookingDecisionService {
         try {
             decisions.saveAndFlush(decision);
             confirmed = confirmationService.confirm(bookingRequest, authorization, decidedAt);
+            domainEvents.record("BookingApproved", "BOOKING_REQUEST", bookingRequest.getId(),
+                    bookingRequest.getVersion(), decidedAt, List.of(bookingRequest.getRequestedByUserId()),
+                    Map.of("requesterUserId", bookingRequest.getRequestedByUserId().toString(),
+                            "decidedByUserId", actor.toString(), "reservationId", confirmed.reservation().getId().toString(),
+                            "meetingId", confirmed.meeting().getId().toString(), "decision", APPROVED.name()));
         } catch (DataIntegrityViolationException exception) {
             if (hasConstraint(exception, UNIQUE_DECISION_CONSTRAINT)
                     || hasConstraint(exception, UNIQUE_RESERVATION_CONSTRAINT)) {

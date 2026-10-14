@@ -219,6 +219,25 @@ erDiagram
     uuid created_by_user_id FK "required"
   }
 
+  ROOM_EVENT_OUTBOX {
+    uuid id PK
+    uuid event_id "required, unique consumer deduplication key"
+    varchar event_type "required"
+    int event_version "required, event schema version"
+    varchar aggregate_type "required"
+    uuid aggregate_id "required"
+    bigint aggregate_version "required, source aggregate version"
+    jsonb payload "required"
+    timestamptz occurred_at "required"
+    timestamptz created_at "required default CURRENT_TIMESTAMP"
+    timestamptz next_attempt_at "required default CURRENT_TIMESTAMP"
+    int attempt_count "required default 0, CHECK gte 0"
+    timestamptz published_at
+    text last_error
+    index pending_delivery "next_attempt_at, created_at WHERE published_at IS NULL"
+    index aggregate_version "aggregate_type, aggregate_id, aggregate_version"
+  }
+
   CLOSURE_PERIOD {
     uuid id PK
     uuid office_building_id FK "optional, null equals nationwide"
@@ -417,10 +436,31 @@ erDiagram
     varchar resource_type
     uuid resource_id
     notification_channel channel "enum IN_APP EMAIL"
-    notification_status status "enum PENDING SENT FAILED DEAD_LETTER"
+    notification_status status "enum PENDING SENT FAILED DEAD_LETTER SCHEDULED CANCELLED"
     jsonb payload
+    timestamptz scheduled_at "required iff status is SCHEDULED"
+    timestamptz cancelled_at "required iff status is CANCELLED"
     timestamptz read_at
     timestamptz created_at "required"
+    index ix_notification_scheduled_due "scheduled_at, id where status = SCHEDULED"
+    unique ux_notification_reminder_schedule "recipient_user_id, channel, resource_type, resource_id, scheduled_at where event_type = Reminder"
+  }
+
+  NOTIFICATION_EVENT_RECEIPT {
+    uuid id PK
+    uuid event_id "required, unique source event deduplication key"
+    varchar source_service "required"
+    varchar event_type "required"
+    int event_version "required, CHECK gt 0"
+    varchar aggregate_type "required"
+    uuid aggregate_id "required"
+    bigint aggregate_version "required, CHECK gte 0"
+    varchar correlation_id
+    varchar causation_id
+    varchar resource_type
+    uuid resource_id
+    timestamptz processed_at "required; receipt and notification effects commit atomically"
+    index ix_notification_event_receipt_resource "resource_type, resource_id, event_type"
   }
 
   NOTIFICATION_TEMPLATE {

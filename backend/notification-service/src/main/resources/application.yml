@@ -3,8 +3,44 @@ spring:
     import: optional:file:.env[.properties]
   application:
     name: notification-service
+  datasource:
+    url: ${NOTIFICATION_DB_URL:jdbc:postgresql://localhost:5432/roomiq_notification}
+    username: ${NOTIFICATION_DB_USERNAME:roomiq}
+    password: ${NOTIFICATION_DB_PASSWORD:roomiq}
+  flyway:
+    enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${NOTIFICATION_RABBITMQ_USERNAME:${RABBITMQ_USERNAME:guest}}
+    password: ${NOTIFICATION_RABBITMQ_PASSWORD:${RABBITMQ_PASSWORD:guest}}
+    listener:
+      simple:
+        acknowledge-mode: auto
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-attempts: ${NOTIFICATION_EVENT_MAX_ATTEMPTS:3}
+          initial-interval: ${NOTIFICATION_EVENT_RETRY_INITIAL_INTERVAL:1s}
+          multiplier: ${NOTIFICATION_EVENT_RETRY_MULTIPLIER:2}
+          max-interval: ${NOTIFICATION_EVENT_RETRY_MAX_INTERVAL:5s}
 server:
   port: ${NOTIFICATION_SERVICE_PORT:8086}
+roomiq:
+  notification:
+    events:
+      enabled: ${NOTIFICATION_EVENT_CONSUMER_ENABLED:true}
+    reminders:
+      delivery-enabled: ${NOTIFICATION_REMINDER_DELIVERY_ENABLED:true}
+      fixed-delay-ms: ${NOTIFICATION_REMINDER_FIXED_DELAY_MS:1000}
 management:
   endpoints:
     web:

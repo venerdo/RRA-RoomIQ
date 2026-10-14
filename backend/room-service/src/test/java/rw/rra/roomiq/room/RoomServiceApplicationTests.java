@@ -58,6 +58,7 @@ import rw.rra.roomiq.room.domain.repository.RoomRuleRepository;
 import rw.rra.roomiq.room.domain.repository.RoomStatusHistoryRepository;
 import rw.rra.roomiq.room.domain.repository.RoomTypeRepository;
 import rw.rra.roomiq.room.integration.OrganizationDirectoryClient;
+import rw.rra.roomiq.room.integration.BookingEventRecipientClient;
 import rw.rra.roomiq.room.integration.CloudinaryPhotoStorage;
 import rw.rra.roomiq.room.integration.RoomPhotoAuthorizationClient;
 
@@ -103,6 +104,41 @@ class RoomServiceApplicationTests {
         registry.add("spring.datasource.password", postgres::getPassword);
         registry.add("room.photos.max-file-size-bytes", () -> 1024);
         registry.add("room.photos.max-count", () -> 2);
+    }
+
+    @Test
+    void roomStatusAndOutboxAreRolledBackTogetherWhenOutboxInsertFails() throws Exception {
+    UUID roomId = createRoom(UUID.randomUUID(), createRoomType(), "Outbox rollback room", "OB-01");
+    jdbcTemplate.execute("""
+            CREATE OR REPLACE FUNCTION reject_room_event_outbox_insert()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'simulated outbox failure';
+            END;
+            $$
+            """);
+    jdbcTemplate.execute("""
+            CREATE TRIGGER reject_room_status_event
+            BEFORE INSERT ON room_event_outbox
+            FOR EACH ROW WHEN (NEW.event_type = 'RoomStatusChanged')
+            EXECUTE FUNCTION reject_room_event_outbox_insert()
+            """);
+    try {
+        mockMvc.perform(patch("/api/v1/rooms/{roomId}/status", roomId)
+                .contentType(APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of(
+                        "status", "MAINTENANCE", "reason", "Rollback verification"))))
+                .andExpect(status().is5xxServerError());
+    } finally {
+        jdbcTemplate.execute("DROP TRIGGER IF EXISTS reject_room_status_event ON room_event_outbox");
+        jdbcTemplate.execute("DROP FUNCTION IF EXISTS reject_room_event_outbox_insert()");
+    }
+
+    assertThat(roomRepository.findById(roomId).orElseThrow().getStatus()).isEqualTo(RoomStatus.AVAILABLE);
+    assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM room_status_history WHERE room_id = ?", Integer.class, roomId)).isZero();
+    assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM room_event_outbox WHERE aggregate_id = ?", Integer.class, roomId)).isZero();
     }
 
     @Autowired
@@ -162,6 +198,9 @@ class RoomServiceApplicationTests {
     @MockitoBean
     private RoomPhotoAuthorizationClient roomPhotoAuthorizationClient;
 
+    @MockitoBean
+    private BookingEventRecipientClient bookingEventRecipientClient;
+
     @BeforeEach
     void allowOrganizationReferencesInIsolatedApiTests() {
         doNothing().when(organizationDirectoryClient)
@@ -170,6 +209,13 @@ class RoomServiceApplicationTests {
             .thenReturn(AUTHORIZED_ACTOR_ID);
         when(roomPhotoAuthorizationClient.authorizeRoomManagement(org.mockito.ArgumentMatchers.isNull()))
             .thenReturn(AUTHORIZED_ACTOR_ID);
+        when(bookingEventRecipientClient.resolveRoomEventRecipients(
+                any(UUID.class), any(UUID.class), any(Instant.class),
+                org.mockito.ArgumentMatchers.nullable(Instant.class)))
+                .thenReturn(List.of(AUTHORIZED_ACTOR_ID));
+        when(bookingEventRecipientClient.resolveRoomEventRecipients(
+                any(UUID.class), any(UUID.class), any(Instant.class), any(Instant.class)))
+                .thenReturn(List.of(AUTHORIZED_ACTOR_ID));
         when(cloudinaryPhotoStorage.upload(any(UUID.class), any(byte[].class), anyString(), anyString()))
             .thenReturn(new CloudinaryPhotoStorage.StoredPhoto(
                 "roomiq/rooms/test/photo-1", "https://res.cloudinary.com/example/photo-1.png"));
@@ -413,10 +459,11 @@ class RoomServiceApplicationTests {
     @Test
     void flywayCreatesRoomResourceTablesAndPostgresIntegrityObjects() {
         assertThat(jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM flyway_schema_history WHERE version IN ('1', '2', '3') AND success = TRUE", Integer.class))
-            .isEqualTo(3);
+            "SELECT COUNT(*) FROM flyway_schema_history WHERE version IN ('1', '2', '3', '4') AND success = TRUE", Integer.class))
+            .isEqualTo(4);
         assertThat(tableNames()).contains("room", "room_type", "facility_type", "room_facility", "room_photo",
-                "room_rule", "room_rule_allowed_department", "room_status_history", "maintenance_period");
+                "room_rule", "room_rule_allowed_department", "room_status_history", "maintenance_period",
+                "room_event_outbox");
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM pg_extension WHERE extname = 'btree_gist'", Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("""
@@ -432,6 +479,14 @@ class RoomServiceApplicationTests {
             SELECT COUNT(*) FROM pg_constraint WHERE conname = 'ck_room_rule_exactly_one_scope'
             """, Integer.class)).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM pg_constraint
+                WHERE conname IN ('uq_room_event_outbox_event_id', 'ck_room_event_outbox_attempt_count')
+                """, Integer.class)).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM pg_indexes
+                WHERE indexname IN ('ix_room_event_outbox_pending', 'ix_room_event_outbox_aggregate_version')
+                """, Integer.class)).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("""
                 SELECT udt_name FROM information_schema.columns
                 WHERE table_schema = 'public' AND table_name = 'maintenance_period' AND column_name = 'period'
                 """, String.class)).isEqualTo("tstzrange");
@@ -445,6 +500,7 @@ class RoomServiceApplicationTests {
         assertThat(importedForeignKeyColumns("room_rule_allowed_department")).containsExactly("room_rule_id");
         assertThat(importedForeignKeyColumns("room_status_history")).containsExactly("room_id");
         assertThat(importedForeignKeyColumns("maintenance_period")).containsExactly("room_id");
+        assertThat(importedForeignKeyColumns("room_event_outbox")).isEmpty();
     }
 
     @Test
@@ -1071,6 +1127,23 @@ class RoomServiceApplicationTests {
                 "changedByUserId", actorId,
                 "reason", "Room retired"))))
             .andExpect(status().isOk());
+        List<Map<String, Object>> statusEvents = jdbcTemplate.queryForList("""
+                SELECT event_type, aggregate_id, aggregate_version, payload
+                FROM room_event_outbox
+                WHERE aggregate_id = ?
+                ORDER BY aggregate_version
+                """, roomId);
+        assertThat(statusEvents).hasSize(2);
+        assertThat(statusEvents).extracting(row -> row.get("event_type"))
+                .containsExactly("RoomStatusChanged", "RoomStatusChanged");
+        assertThat(statusEvents).extracting(row -> ((Number) row.get("aggregate_version")).longValue())
+                .containsExactly(1L, 2L);
+        assertThat(statusEvents.get(0).get("payload").toString()).contains(roomId.toString(), "MAINTENANCE");
+        assertThat(statusEvents.get(1).get("payload").toString()).contains(roomId.toString(), "DECOMMISSIONED");
+        assertThat(statusEvents.get(0).get("payload").toString()).contains(AUTHORIZED_ACTOR_ID.toString());
+        verify(bookingEventRecipientClient, times(2)).resolveRoomEventRecipients(
+                eq(roomId), any(UUID.class), any(Instant.class),
+                org.mockito.ArgumentMatchers.nullable(Instant.class));
 
         mockMvc.perform(patch("/api/v1/rooms/{roomId}/status", roomId)
             .contentType(APPLICATION_JSON)
@@ -1158,6 +1231,35 @@ class RoomServiceApplicationTests {
         mockMvc.perform(get("/api/v1/rooms/{roomId}/maintenance-periods", roomId))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.data.length()").value(2));
+        UUID firstPeriodId = jdbcTemplate.queryForObject(
+                "SELECT id FROM maintenance_period WHERE room_id = ? ORDER BY lower(period) LIMIT 1",
+                UUID.class, roomId);
+        List<Map<String, Object>> createdEvents = jdbcTemplate.queryForList("""
+                SELECT aggregate_version, payload
+                FROM room_event_outbox
+                WHERE aggregate_id = ? AND event_type = 'RoomMaintenanceChanged'
+                ORDER BY aggregate_version
+                """, roomId);
+        assertThat(createdEvents).hasSize(2);
+        assertThat(createdEvents).extracting(row -> ((Number) row.get("aggregate_version")).longValue())
+                .containsExactly(1L, 2L);
+        assertThat(createdEvents.get(0).get("payload").toString())
+                .contains(firstPeriodId.toString(), "SCHEDULED", "2026-05-01T09:00:00Z", "2026-05-01T10:00:00Z");
+
+        mockMvc.perform(delete("/api/v1/rooms/{roomId}/maintenance-periods/{maintenancePeriodId}",
+                roomId, firstPeriodId))
+            .andExpect(status().isOk());
+        List<Map<String, Object>> lifecycleEvents = jdbcTemplate.queryForList("""
+                SELECT aggregate_version, payload
+                FROM room_event_outbox
+                WHERE aggregate_id = ? AND event_type = 'RoomMaintenanceChanged'
+                ORDER BY aggregate_version
+                """, roomId);
+        assertThat(lifecycleEvents).hasSize(3);
+        assertThat(lifecycleEvents).extracting(row -> ((Number) row.get("aggregate_version")).longValue())
+                .containsExactly(1L, 2L, 3L);
+        assertThat(lifecycleEvents.get(2).get("payload").toString())
+                .contains(firstPeriodId.toString(), "REMOVED", "2026-05-01T09:00:00Z", "2026-05-01T10:00:00Z");
 
         mockMvc.perform(post("/api/v1/rooms/{roomId}/maintenance-periods", roomId)
             .contentType(APPLICATION_JSON)
@@ -1184,7 +1286,8 @@ class RoomServiceApplicationTests {
         assertThat(entityManagerFactory.getMetamodel().getEntities())
             .extracting(entityType -> entityType.getJavaType().getSimpleName())
             .containsExactlyInAnyOrder("RoomType", "FacilityType", "Room", "RoomFacility", "RoomPhoto",
-                "RoomRule", "RoomRuleAllowedDepartment", "RoomStatusHistory", "MaintenancePeriod");
+                "RoomRule", "RoomRuleAllowedDepartment", "RoomStatusHistory", "MaintenancePeriod",
+                "RoomEventOutboxEntry");
 
         UUID buildingId = UUID.randomUUID();
         UUID floorId = UUID.randomUUID();

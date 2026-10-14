@@ -26,9 +26,11 @@ import rw.rra.roomiq.booking.domain.dto.BookingExtensionResponse;
 import rw.rra.roomiq.booking.domain.dto.CancellationRequest;
 import rw.rra.roomiq.booking.domain.dto.CreateBookingRequest;
 import rw.rra.roomiq.booking.domain.dto.CreateBookingExtensionRequest;
+import rw.rra.roomiq.booking.domain.dto.RoomEventRecipientsRequest;
 import rw.rra.roomiq.booking.domain.entity.BookingExtension;
 import rw.rra.roomiq.booking.domain.entity.Reservation;
 import rw.rra.roomiq.booking.domain.entity.BookingRequest;
+import rw.rra.roomiq.booking.domain.entity.Meeting;
 import rw.rra.roomiq.booking.domain.entity.Cancellation;
 import rw.rra.roomiq.booking.domain.entity.ReservationOccurrence;
 import rw.rra.roomiq.booking.domain.enums.ApprovalDecisionType;
@@ -53,6 +55,7 @@ import rw.rra.roomiq.booking.domain.service.BookingDecisionService;
 import rw.rra.roomiq.booking.domain.service.BookingExtensionService;
 import rw.rra.roomiq.booking.domain.service.BookingCancellationService;
 import rw.rra.roomiq.booking.domain.service.BookingRequestService;
+import rw.rra.roomiq.booking.domain.service.BookingRoomEventRecipientsService;
 import rw.rra.roomiq.booking.domain.service.ReservationLifecycleService;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationClient;
 import rw.rra.roomiq.booking.integration.BookingAuthorizationRequest;
@@ -122,6 +125,8 @@ class BookingDecisionPostgresTests {
     private BookingExtensionService extensionService;
     @Autowired
     private BookingRequestService bookingRequestService;
+    @Autowired
+    private BookingRoomEventRecipientsService roomEventRecipientsService;
     @Autowired
     private BookingRequestRepository bookingRequests;
     @Autowired
@@ -219,6 +224,37 @@ class BookingDecisionPostgresTests {
         assertThat(organizer.getInviteStatus()).isEqualTo(InviteStatus.ACCEPTED);
         assertThat(response.reservationId()).isEqualTo(reservation.getId());
         assertThat(response.meetingId()).isEqualTo(meeting.getId());
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE event_type = 'BookingApproved' AND aggregate_id = ?
+                """, Integer.class, request.getId())).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT payload -> 'payload' ->> 'requesterUserId'
+                FROM booking_event_outbox
+                WHERE event_type = 'BookingApproved' AND aggregate_id = ?
+                """, String.class, request.getId())).isEqualTo(request.getRequestedByUserId().toString());
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE event_type = 'Reminder' AND aggregate_id = ?
+                """, Integer.class, meeting.getId())).isEqualTo(2);
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT (payload -> 'payload' ->> 'reminderOffsetMinutes')::integer
+                FROM booking_event_outbox
+                WHERE event_type = 'Reminder' AND aggregate_id = ?
+                ORDER BY (payload -> 'payload' ->> 'reminderOffsetMinutes')::integer DESC
+                """, Integer.class, meeting.getId())).containsExactly(15, 5);
+        assertThat(jdbcTemplate.queryForList("""
+                SELECT payload -> 'payload' ->> 'reminderAt'
+                FROM booking_event_outbox
+                WHERE event_type = 'Reminder' AND aggregate_id = ?
+                ORDER BY (payload -> 'payload' ->> 'reminderOffsetMinutes')::integer DESC
+                """, String.class, meeting.getId()))
+                .containsExactly("2030-04-10T09:45:00Z", "2030-04-10T09:55:00Z");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE event_type = 'Reminder' AND aggregate_id = ?
+                  AND payload -> 'payload' ->> 'timezone' = 'Africa/Kigali'
+                """, Integer.class, meeting.getId())).isEqualTo(2);
         assertThat(outbox.findAll()).filteredOn(entry -> entry.getAggregateId().equals(reservation.getId()))
                 .hasSize(1);
         assertThat(jdbcTemplate.queryForObject("""
@@ -231,6 +267,67 @@ class BookingDecisionPostgresTests {
                 FROM booking_event_outbox
                 WHERE aggregate_id = ?
                 """, String.class, reservation.getId())).contains("2030-04-10T11:15:00Z");
+    }
+
+    @Test
+    void roomEventRecipientLookupReturnsOnlyOverlappingActiveInternalUsersInAuthorizedBuilding()
+            throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        UUID buildingId = UUID.randomUUID();
+        UUID confirmedOrganizerId = UUID.randomUUID();
+        UUID confirmedParticipantId = UUID.randomUUID();
+        Reservation confirmed = confirmedReservation(confirmedOrganizerId, roomId, START, END);
+        setRequestBuilding(confirmed, buildingId);
+        Meeting confirmedMeeting = meetings.findByReservation_Id(confirmed.getId()).orElseThrow();
+        participants.saveAndFlush(new rw.rra.roomiq.booking.domain.entity.MeetingParticipant(
+                confirmedMeeting, confirmedParticipantId, null, null, ParticipantRole.REQUIRED, InviteStatus.INVITED));
+        participants.saveAndFlush(new rw.rra.roomiq.booking.domain.entity.MeetingParticipant(
+                confirmedMeeting, null, "external@example.invalid", "External", ParticipantRole.REQUIRED,
+                InviteStatus.INVITED));
+
+        UUID inProgressOrganizerId = UUID.randomUUID();
+        Reservation inProgress = confirmedReservation(inProgressOrganizerId, roomId,
+                START.plusSeconds(7200), END.plusSeconds(7200));
+        setRequestBuilding(inProgress, buildingId);
+        assertThat(inProgress.checkIn(START.plusSeconds(7200))).isTrue();
+        reservations.saveAndFlush(inProgress);
+
+        UUID cancelledOrganizerId = UUID.randomUUID();
+        Reservation cancelled = confirmedReservation(cancelledOrganizerId, roomId,
+                START.plusSeconds(14_400), END.plusSeconds(14_400));
+        setRequestBuilding(cancelled, buildingId);
+        assertThat(cancelled.cancel()).isTrue();
+        reservations.saveAndFlush(cancelled);
+        reservationOccurrences.findAllByReservation_IdOrderByStartAt(cancelled.getId())
+                .forEach(ReservationOccurrence::releaseOccupancy);
+        reservationOccurrences.flush();
+
+        UUID outsideWindowOrganizerId = UUID.randomUUID();
+        Reservation outsideWindow = confirmedReservation(outsideWindowOrganizerId, roomId,
+                START.plusSeconds(172_800), END.plusSeconds(172_800));
+        setRequestBuilding(outsideWindow, buildingId);
+
+        when(authorizationClient.authorizeRoomManagement(buildingId)).thenReturn(UUID.randomUUID());
+
+        var response = roomEventRecipientsService.resolve(new RoomEventRecipientsRequest(
+                roomId, buildingId, START, END.plusSeconds(18_000), "v1"));
+
+        assertThat(response.contractVersion()).isEqualTo("v1");
+        assertThat(response.roomId()).isEqualTo(roomId);
+        assertThat(response.recipientUserIds()).containsExactlyInAnyOrder(
+                confirmedOrganizerId, confirmedParticipantId, inProgressOrganizerId);
+        assertThat(response.recipientUserIds()).doesNotContain(
+                cancelledOrganizerId, outsideWindowOrganizerId);
+
+        var statusRecipients = roomEventRecipientsService.resolve(new RoomEventRecipientsRequest(
+                roomId, buildingId, START, null, "v1"));
+        assertThat(statusRecipients.recipientUserIds()).contains(
+                confirmedOrganizerId, confirmedParticipantId, inProgressOrganizerId, outsideWindowOrganizerId);
+        assertThat(statusRecipients.recipientUserIds()).doesNotContain(cancelledOrganizerId);
+
+        var adjacentWindow = roomEventRecipientsService.resolve(new RoomEventRecipientsRequest(
+                roomId, buildingId, END.plusSeconds(300), END.plusSeconds(900), "v1"));
+        assertThat(adjacentWindow.recipientUserIds()).isEmpty();
     }
 
     @Test
@@ -266,6 +363,131 @@ class BookingDecisionPostgresTests {
                 SELECT (status = 'COMPLETED') = (completed_at IS NOT NULL)
                 FROM reservation WHERE id = ?
                 """, Boolean.class, reservation.getId())).isTrue();
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE event_type = 'MeetingCompleted'
+                  AND payload -> 'payload' ->> 'meetingId' = ?
+                """, Integer.class, meetings.findByReservation_Id(reservation.getId()).orElseThrow()
+                .getId().toString())).isEqualTo(1);
+    }
+
+    @Test
+    void explicitReleaseAtomicallyReleasesEveryOccurrenceAndNotifiesInternalParticipants()
+            throws SQLException {
+        UUID organizerId = UUID.randomUUID();
+        UUID internalParticipantId = UUID.randomUUID();
+        UUID actorId = UUID.randomUUID();
+        Reservation reservation = confirmedReservation(organizerId, UUID.randomUUID(), START, END);
+        Meeting meeting = meetings.findByReservation_Id(reservation.getId()).orElseThrow();
+        participants.saveAndFlush(new rw.rra.roomiq.booking.domain.entity.MeetingParticipant(
+                meeting, organizerId, null, null, ParticipantRole.ORGANIZER, InviteStatus.ACCEPTED));
+        participants.saveAndFlush(new rw.rra.roomiq.booking.domain.entity.MeetingParticipant(
+                meeting, internalParticipantId, null, null, ParticipantRole.REQUIRED, InviteStatus.ACCEPTED));
+        participants.saveAndFlush(new rw.rra.roomiq.booking.domain.entity.MeetingParticipant(
+                meeting, null, "external@example.invalid", "External", ParticipantRole.REQUIRED,
+                InviteStatus.INVITED));
+        when(authorizationClient.authorizeReservationLifecycle(organizerId,
+                reservation.getBookingRequest().getDepartmentId(),
+                reservation.getBookingRequest().getOfficeBuildingId())).thenReturn(actorId);
+
+        var released = reservationLifecycleService.release(reservation.getId());
+
+        assertThat(released.status()).isEqualTo(ReservationStatus.RELEASED);
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.RELEASED);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isFalse());
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE event_type = 'booking.occupancy.changed'
+                  AND payload ->> 'action' = 'REMOVE'
+                  AND payload ->> 'reservationId' = ?
+                """, Integer.class, reservation.getId().toString())).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE event_type = 'MeetingReleased'
+                  AND payload -> 'payload' ->> 'meetingId' = ?
+                  AND payload -> 'payload' ->> 'releasedByUserId' = ?
+                  AND payload -> 'payload' ->> 'releasedAt' IS NOT NULL
+                """, Integer.class, meeting.getId().toString(), actorId.toString())).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT payload -> 'payload' -> 'recipientUserIds'
+                FROM booking_event_outbox WHERE event_type = 'MeetingReleased'
+                  AND payload -> 'payload' ->> 'meetingId' = ?
+                """, String.class, meeting.getId().toString()))
+                .contains(organizerId.toString(), internalParticipantId.toString())
+                .doesNotContain("external@example.invalid");
+    }
+
+    @Test
+    void explicitReleaseRejectsCompletedReservationsWithoutCreatingReleaseEvents() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenReturn(UUID.randomUUID());
+        reservationLifecycleService.checkIn(reservation.getId());
+        reservationLifecycleService.complete(reservation.getId());
+
+        assertLifecycleConflict(() -> reservationLifecycleService.release(reservation.getId()));
+
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.COMPLETED);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM booking_event_outbox WHERE event_type = 'MeetingReleased'",
+                Integer.class)).isZero();
+    }
+
+    @Test
+    void explicitReleaseIsSupportedForAnInProgressReservation() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenReturn(UUID.randomUUID());
+        reservationLifecycleService.checkIn(reservation.getId());
+
+        var released = reservationLifecycleService.release(reservation.getId());
+
+        assertThat(released.status()).isEqualTo(ReservationStatus.RELEASED);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isFalse());
+    }
+
+    @Test
+    void explicitReleaseOutboxFailureRollsBackReservationAndOccupancyChanges() throws SQLException {
+        Reservation reservation = confirmedReservation(UUID.randomUUID(), UUID.randomUUID(), START, END);
+        when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
+                .thenReturn(UUID.randomUUID());
+        jdbcTemplate.execute("""
+                CREATE OR REPLACE FUNCTION reject_meeting_release_outbox_insert()
+                RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'simulated MeetingReleased outbox failure';
+                END;
+                $$
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER trg_booking_test_reject_meeting_release
+                BEFORE INSERT ON booking_event_outbox
+                FOR EACH ROW WHEN (NEW.event_type = 'MeetingReleased')
+                EXECUTE FUNCTION reject_meeting_release_outbox_insert()
+                """);
+        try {
+            assertThatThrownBy(() -> reservationLifecycleService.release(reservation.getId()))
+                    .isInstanceOf(RuntimeException.class);
+        } finally {
+            jdbcTemplate.execute("DROP TRIGGER IF EXISTS trg_booking_test_reject_meeting_release "
+                    + "ON booking_event_outbox");
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS reject_meeting_release_outbox_insert()");
+        }
+
+        assertThat(reservations.findById(reservation.getId()).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(reservationOccurrences.findAllByReservation_IdOrderByStartAt(reservation.getId()))
+                .allSatisfy(occurrence -> assertThat(occurrence.isOccupancyActive()).isTrue());
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM booking_event_outbox
+                WHERE event_type = 'booking.occupancy.changed'
+                  AND payload ->> 'action' = 'REMOVE'
+                  AND payload ->> 'reservationId' = ?
+                """, Integer.class, reservation.getId().toString())).isZero();
     }
 
     @Test
@@ -310,6 +532,9 @@ class BookingDecisionPostgresTests {
         when(authorizationClient.authorizeReservationLifecycle(any(UUID.class), any(UUID.class), any(UUID.class)))
                 .thenThrow(new DomainException(HttpStatus.FORBIDDEN, "ACCESS_DENIED", "Denied"));
         assertThatThrownBy(() -> reservationLifecycleService.complete(reservation.getId()))
+                .isInstanceOf(DomainException.class)
+                .satisfies(error -> assertThat(((DomainException) error).status()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> reservationLifecycleService.release(reservation.getId()))
                 .isInstanceOf(DomainException.class)
                 .satisfies(error -> assertThat(((DomainException) error).status()).isEqualTo(HttpStatus.FORBIDDEN));
         Reservation unchanged = reservations.findById(reservation.getId()).orElseThrow();
@@ -1379,7 +1604,14 @@ class BookingDecisionPostgresTests {
         Reservation reservation = reservations.saveAndFlush(new Reservation(request, roomId, organizerId, null, occupied,
                 startsAt, endsAt, 5, ReservationStatus.CONFIRMED, Instant.now()));
         reservationOccurrences.saveAndFlush(new ReservationOccurrence(reservation, roomId, startsAt, endsAt, occupied));
+        meetings.saveAndFlush(new Meeting(reservation, "Test meeting", null, "Test organizer",
+                null, null, MeetingVisibility.INTERNAL, Instant.now()));
         return reservation;
+    }
+
+    private void setRequestBuilding(Reservation reservation, UUID buildingId) {
+        jdbcTemplate.update("UPDATE booking_request SET office_building_id = ? WHERE id = ?",
+                buildingId, reservation.getBookingRequest().getId());
     }
 
     private static PGobject occupiedPeriod(Instant startsAt, Instant occupiedUntil) throws SQLException {

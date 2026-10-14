@@ -40,6 +40,33 @@ public class BookingAuthorizationClient {
                 new BookingAuthorizationRequest(Action.AUTHENTICATE, null, null, null, null));
     }
 
+    public UUID authorizeRoomManagement(UUID officeBuildingId) {
+        String bearerToken = currentAuthorization();
+        if (officeBuildingId == null) {
+            throw unavailable();
+        }
+        try {
+            RoomManagementAuthorizationResponse response = identityClient.post()
+                    .uri("/api/v1/internal/authorization/room-management")
+                    .header(HttpHeaders.AUTHORIZATION, bearerToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(new RoomManagementAuthorizationRequest(officeBuildingId))
+                    .retrieve()
+                    .body(RoomManagementAuthorizationResponse.class);
+            if (response == null || response.actorUserId() == null) {
+                throw unavailable();
+            }
+            return response.actorUserId();
+        } catch (HttpClientErrorException.Unauthorized exception) {
+            throw authenticationRequired();
+        } catch (HttpClientErrorException.Forbidden exception) {
+            throw new DomainException(HttpStatus.FORBIDDEN, "ACCESS_DENIED",
+                    "Room event recipient lookup is not authorized");
+        } catch (RestClientException exception) {
+            throw unavailable();
+        }
+    }
+
     public UUID authorizeCurrentCaller(BookingAuthorizationRequest request) {
         return authorize(currentAuthorization(), request);
     }
@@ -180,6 +207,12 @@ public class BookingAuthorizationClient {
     private static DomainException unavailable() {
         return new DomainException(HttpStatus.SERVICE_UNAVAILABLE, "IDENTITY_AUTHORIZATION_UNAVAILABLE",
                 "Identity authorization is unavailable; the Booking operation cannot proceed");
+    }
+
+    private record RoomManagementAuthorizationRequest(UUID officeBuildingId) {
+    }
+
+    private record RoomManagementAuthorizationResponse(UUID actorUserId) {
     }
 
     private static RestClient.Builder timeoutBoundBuilder(RestClient.Builder builder) {

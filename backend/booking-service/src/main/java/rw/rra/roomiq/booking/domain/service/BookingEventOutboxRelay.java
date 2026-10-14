@@ -78,11 +78,29 @@ public class BookingEventOutboxRelay {
                 .build();
         CorrelationData confirmation = new CorrelationData(entry.getEventId().toString());
         rabbitTemplate.send(BookingEventMessagingConfiguration.EVENTS_EXCHANGE,
-                BookingEventMessagingConfiguration.OCCUPANCY_ROUTING_KEY, message, confirmation);
+                routingKeyFor(entry.getEventType()), message, confirmation);
         CorrelationData.Confirm confirm = confirmation.getFuture().get(confirmTimeoutMillis, TimeUnit.MILLISECONDS);
         if (confirm == null || !confirm.ack() || confirmation.getReturned() != null) {
             throw new IllegalStateException("Booking event was not confirmed and routed by the broker");
         }
+    }
+
+    private static String routingKeyFor(String eventType) {
+        return switch (eventType) {
+            case BookingOccupancyOutboxService.EVENT_TYPE ->
+                    BookingEventMessagingConfiguration.OCCUPANCY_ROUTING_KEY;
+            case "BookingRequested" -> "booking.requested";
+            case "BookingApproved" -> "booking.approved";
+            case "BookingRejected" -> "booking.rejected";
+            case "BookingCancelled" -> "booking.cancelled";
+            case "ExtensionRequested" -> "booking.extension.requested";
+            case "ExtensionDecided" -> "booking.extension.decided";
+            case "MeetingCompleted" -> "booking.meeting.completed";
+            case "MeetingReleased" -> "booking.meeting.released";
+            case "AutomaticReleaseOrNoShow" -> "booking.automatic-release-or-no-show";
+            case "Reminder" -> "notification.reminder";
+            default -> throw new IllegalStateException("Unsupported Booking event type in outbox");
+        };
     }
 
     private void defer(BookingEventOutboxEntry entry, Exception exception, Instant now) {

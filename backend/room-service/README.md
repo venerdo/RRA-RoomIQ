@@ -6,7 +6,7 @@ S4-01 through S4-12 are complete, verified, and accepted by the user. Flyway V1 
 
 ## Persistence boundary
 
-Room Service owns `room`, `room_type`, `facility_type`, `room_facility`, `room_photo`, `room_rule`, `room_rule_allowed_department`, `room_status_history`, and `maintenance_period`. Foreign keys are limited to relationships within those Room-owned tables. `floor_id`, `office_building_id`, `department_id`, and user/actor IDs are UUID references only; this service does not own or directly access Organization or Identity tables.
+Room Service owns `room`, `room_type`, `facility_type`, `room_facility`, `room_photo`, `room_rule`, `room_rule_allowed_department`, `room_status_history`, `maintenance_period`, and the approved local `room_event_outbox`. Foreign keys are limited to relationships within those Room-owned tables. `floor_id`, `office_building_id`, `department_id`, and user/actor IDs are UUID references only; this service does not own or directly access Organization or Identity tables.
 
 Room capacity must be positive. Room names and codes are case-insensitively unique within a building. Type/facility codes are unique. Facility assignments are unique per room/type; quantity must be 1 through 32767, state must be `WORKING`, `FAULTY`, or `REMOVED`, and `lastServicedAt` is optional. Inactive facility types cannot be assigned. Rule and status values are constrained, and timestamps use `TIMESTAMP WITH TIME ZONE`.
 
@@ -67,6 +67,16 @@ The focused suites verify all nine tables, Flyway V1-V3, local foreign-key bound
 ### S4-12 Documentation and acceptance readiness
 
 Room runtime settings are externalized in `backend/.env.example`: `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `ROOM_SERVICE_PORT` (default `8083`), `ORGANIZATION_SERVICE_URL`, `IDENTITY_SERVICE_URL`, Cloudinary cloud/key/secret/folder, photo file-size/count limits, and servlet multipart limits. The matching defaults and Flyway/schema-validation settings are in `src/main/resources/application.yml`. Room photo binaries are provider-managed; Room stores the asset ID and approved metadata.
+
+## S7-01 operational event production
+
+Room status and maintenance mutations write versioned `RoomStatusChanged` and `RoomMaintenanceChanged` events into the approved Room-owned `ROOM_EVENT_OUTBOX` in the same PostgreSQL transaction as their source mutation. The scheduled relay publishes persistent messages to the v1 RabbitMQ exchange with correlated publisher confirms, mandatory-return handling, and retryable delivery; at-least-once consumers deduplicate by `eventId`. Both Room events use aggregate type `ROOM`.
+
+Before emitting these events, Room calls Booking's protected `POST /api/v1/internal/notifications/room-event-recipients`, forwarding the caller bearer token. Identity authorizes `ROOM_MANAGE` for the supplied building. Booking returns distinct organizers and internal participants on `CONFIRMED`/`IN_PROGRESS` occurrences whose buffered occupied interval overlaps the maintenance period; for a status change, lookup starts at the event instant and has no upper bound. External attendees are not included. Invalid or unavailable lookup responses fail the Room operation; Room does not emit an event with a silently empty or fabricated audience. The endpoint contract is in `../api-contracts/rra-roomiq-stage1-contract.json`.
+
+The Room Service uses `BOOKING_SERVICE_URL` (default `http://localhost:8085`) for recipient lookup and supports distinct `ROOM_RABBITMQ_USERNAME`/`ROOM_RABBITMQ_PASSWORD` publisher credentials, falling back to shared local RabbitMQ settings for development. Production broker accounts and per-routing-key publish permissions still require deployment configuration and verification.
+
+S7-01 Room producer/recipient verification passed 35 tests. Identity passed 53 tests, common-web 6 tests, and the full 11-module reactor passed 61 suites/354 tests, all with zero failures, errors, or skips. S7-01 is complete at the repository level; production publisher credentials and routing-key permissions remain an external deployment gate.
 
 `backend/api-contracts/rra-roomiq-room-postman-collection.json` provides examples for all 31 Room operations with inherited bearer auth, correlation IDs, safe UUID placeholders, representative request bodies, and chained resource IDs. Validate its route inventory and headers with `node api-contracts/validate-room-postman-collection.mjs` from `backend/`.
 
